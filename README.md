@@ -1,10 +1,13 @@
-# DhakaFlix for Zangetsu
+# Mamun015 Zangetsu Sources
 
-Zangetsu-র জন্য অফিসিয়াল-বহির্ভূত সোর্স। BDIX ফাইল সার্ভার **DhakaFlix**
-(`http://172.16.50.4/`) থেকে মুভি, সিরিজ আর অ্যানিমে সরাসরি ব্রাউজ করে চালায়।
+Zangetsu অ্যাপের জন্য BDIX সোর্স সংগ্রহ। লোকাল নেটওয়ার্কের BDIX ফাইল সার্ভার
+থেকে মুভি, সিরিজ আর অ্যানিমে সরাসরি ব্রাউজ করে চালানো যায়।
 
-> ⚠️ এই সোর্স শুধু কাজ করে যদি তুমি BDIX-সংযুক্ত ইন্টারনেট লাইনে থাকো।
-> অন্য নেটওয়ার্কে সার্ভারটাই ধরা পড়ে না।
+এখন আছে: **DhakaFlix** (মুভি / সিরিজ / অ্যানিমে)। ভবিষ্যতে আরও BDIX সাইট যোগ
+হবে — প্রতিটি সাইটের নিজস্ব `sources/<সাইটের-নাম>.js` ফাইল থাকবে।
+
+> ⚠️ এই সোর্সগুলো শুধু BDIX-সংযুক্ত লাইনে কাজ করে। অন্য নেটওয়ার্কে সার্ভারগুলো
+> ধরা পড়ে না, তাই লিস্ট ও স্ট্রিম ফাঁকা থাকে।
 
 ## ইনস্টল
 
@@ -13,15 +16,14 @@ Zangetsu-র জন্য অফিসিয়াল-বহির্ভূত �
 3. **Add repository** চাপো, এই লিংকটা দাও:
 
 ```
-https://raw.githubusercontent.com/Mamun015/zangetsu-dhakaflix/main/index.json
+https://raw.githubusercontent.com/Mamun015-Zangetsu/main/index.json
 ```
 
-4. লিস্টে আসবে তিনটা সোর্স — **DhakaFlix Movies**, **DhakaFlix Series**,
-   **DhakaFlix Anime**। যেটা দরকার ইনস্টল করো।
+4. লিস্টে আসা সোর্সগুলো ইনস্টল করো
 
-## কী কী আছে
+## এখনকার সোর্সগুলো
 
-| সোর্স | ক্যাটাগরি |
+| সোর্স | কী আছে |
 |---|---|
 | **DhakaFlix Movies** | English Movies, English 1080p, Hindi, South Indian (+Hindi Dubbed), Kolkata Bangla, Foreign Language, IMDb Top 250, 3D |
 | **DhakaFlix Series** | TV & Web Series, Korean TV & Web Series, Cartoon TV Series |
@@ -29,35 +31,46 @@ https://raw.githubusercontent.com/Mamun015/zangetsu-dhakaflix/main/index.json
 
 ## কীভাবে কাজ করে
 
-- সার্ভারে h5ai 0.29 চলছে। এর JSON API (`POST` + `{action:"get", …}`) দিয়ে
-  ফোল্ডার লিস্টিং আর **রিকার্সিভ regex সার্চ** নেওয়া হয় — তাই সার্চ ১–৩ সেকেন্ডে
-  আসে, কোনো নিজস্ব ইনডেক্স লাগে না।
-- সার্ভার-রেন্ডার করা HTML টেবিলও ফলব্যাক হিসেবে পার্স করা হয়, JSON API বন্ধ
-  হয়ে গেলে সোর্সটা তবু চলবে।
-- ভিডিও ফাইল nginx থেকে সোজা আসে (`Accept-Ranges: bytes`), তাই সিক করা,
+- সার্ভারের নিজস্ব ডিরেক্টরি API ব্যবহার করে ফোল্ডার লিস্টিং আর **রিকার্সিভ
+  regex সার্চ** — তাই সার্চ ১–৩ সেকেন্ডে আসে, কোনো আলাদা ইনডেক্স লাগে না।
+- API বন্ধ থাকলে সার্ভারের HTML ডিরেক্টরি টেবিল পার্স করে ফলব্যাক কাজ করে।
+- ভিডিও ফাইল সার্ভার থেকে সোজা আসে এবং Range request সাপোর্ট করে, তাই সিক,
   রিজিউম, ডাউনলোড — সবই কাজ করে, কোনো প্রক্সি লাগে না।
-- একটাই ফাইল, তিনটা sourceId: `dhakaflix_movies`, `dhakaflix_series`,
-  `dhakaflix_anime`। `getInfo()`-র `type` আর ক্যাটাগরি লিস্ট sourceId থেকে ঠিক হয়।
+- একটি ফাইল, তিনটি sourceId: `dhakaflix_movies`, `dhakaflix_series`,
+  `dhakaflix_anime`। কোন সোর্সে কী যাবে তা `CATEGORIES` অ্যারে ঠিক করে।
+- একই টাইটে ভিন্ন কোডেকের একাধিক ফাইল থাকলে যেটা ফোনে চলবে সেটা আগে দেখানো হয়
+  (MP4 / H.264 আগে, HEVC 10-bit শেষে), বাকিগুলো আলাদা সোর্স হিসেবে থাকে।
+
+## নতুন সাইট যোগ করার নিয়ম
+
+1. `sources/` ফোল্ডারে `<সাইটের-নাম>.js` নামে একটি ফাইল বানাও (অন্য সাইটের
+   ফাইলটি কপি করে ক্যাটাগরির URL বদলে দাও)
+2. `index.json`-এ নতুন একটি এন্ট্রি যোগ করো:
+
+```json
+{
+  "id": "<সাইটের-নাম>_movies",
+  "name": "<সাইটের নাম> Movies",
+  "version": "1.0.0",
+  "type": "movie",
+  "lang": "en",
+  "file": "sources/<সাইটের-নাম>.js",
+  "logo": "https://raw.githubusercontent.com/Mamun015-Zangetsu/main/logo.png"
+}
+```
+
+3. প্রোভাইডার কনট্র্যাক্ট: `getInfo`, `getHome`, `popular`, `search`,
+   `getDetail`, `getEpisodes`, `getVideoSources` — প্রতিটা ফাংশনের জন্য
+   [Zangetsu-র `providers/_template.js`](https://github.com/Spyou/Zangetsu/blob/main/providers/_template.js)
+   দেখো।
 
 ## সীমাবদ্ধতা
 
-- ফাইল নেম থেকে টাইটেল, বছর, সিজন, এপিসোড পার্স করা হয় — মেটাডেটা (পোস্টার,
-  গল্প, কাস্ট) সার্ভারে নেই, তাই দেখানো হয় না।
-- ডাউনলোড স্পিড, প্লেব্যাক — সবই তোমার BDIX লাইন আর সার্ভারের উপর নির্ভর।
-- সার্ভার নিজের পোর্টালে লিংক বদলালে `sources/dhakaflix.js`-এর `CATEGORIES`
-  অ্যারে আপডেট করতে হবে।
-
-## ডেভেলপমেন্ট
-
-```bash
-# যেকোনো একটা সোর্স Zangetsu-র নিজস্ব JS হারনেসে লোড করে টেস্ট করা যায়
-node js_harness/host.mjs      # Zangetsu রিপোর হেল্পার
-```
-
-প্রোভাইডার কনট্র্যাক্ট: `getInfo`, `getHome`, `popular`, `search`,
-`getDetail`, `getEpisodes`, `getVideoSources` — প্রতিটা ফাংশনের জন্য
-[Zangetsu-র `providers/_template.js`](https://github.com/Spyou/Zangetsu/blob/main/providers/_template.js)
-দেখো।
+- ফাইল নেম থেকে টাইটেল, বছর, সিজন আর এপিসোড নম্বর পার্স করা হয় — সার্ভারে
+  আলাদা মেটাডেটা নেই, তাই গল্প/কাস্ট দেখানো হয় না।
+- প্লেব্যাক ও ডাউনলোড স্পিড তোমার BDIX লাইন আর সার্ভারের উপর নির্ভর করে।
+- নতুন কোডেক (যেমন HEVC 10-bit) সব ফোনে চলে না — সেক্ষেত্রে Zangetsu-র
+  Settings → Player → Video decoder → "Software (most compatible)" কাজে দেয়।
 
 ## লাইসেন্স
 
