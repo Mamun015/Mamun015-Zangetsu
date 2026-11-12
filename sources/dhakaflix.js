@@ -259,7 +259,7 @@ function _sortByEpisode(a, b) {
 // --- Item shapes ------------------------------------------------------------
 function _item(name, url, cat) {
   return {
-    id: url, title: _pretty(name), url: url,
+    id: url, title: _pretty(name), url: url, _path: _path(url).replace(/\/+$/, ''),
     type: KIND === 'anime' ? 'anime' : 'movie',
     sourceId: SOURCE_ID, cover: null, description: null,
     _year: _yearOf(name), _cat: cat ? cat.id : null
@@ -281,13 +281,61 @@ function _mapLimit(list, limit, fn) {
   return Promise.all(workers).then(function () { return out; });
 }
 
+
+// The server keeps a poster inside each title folder ("a_AL_.jpg" / "a_VL_.jpg").
+// One recursive search per folder finds them all at once, so the home rows and
+// detail pages can show real artwork without one request per title.
+var _coverCache = {};
+
+function _coversFor(dirUrl) {
+  var key = String(dirUrl);
+  if (_coverCache[key]) return Promise.resolve(_coverCache[key]);
+  var href = _path(dirUrl).replace(/\/+$/, '') + '/';
+  var promise = _h5ai(dirUrl, { action: 'get', search: { href: href, pattern: '\\.(jpe?g|png)$', ignorecase: true } })
+    .then(function (j) {
+      var hits = j.search || [], map = {}, prefer = {};
+      for (var i = 0; i < hits.length; i++) {
+        var h = hits[i] && hits[i].href;
+        if (!h || /\/$/.test(h)) continue;
+        var parent = h.replace(/\/[^\/]*$/, '');
+        var name = _segName(h).toLowerCase();
+        if (/^a_(al|vl)_/.test(name)) { prefer[parent] = true; map[parent] = _origin(dirUrl) + h; }
+        else if (!map[parent]) map[parent] = _origin(dirUrl) + h;
+      }
+      for (var p in prefer) { /* keep the a_AL_ / a_VL_ poster */ }
+      _coverCache[key] = map;
+      return map;
+    })
+    .catch(function () { return {}; });
+  _coverCache[key] = promise;
+  return promise;
+}
+
+// Internal fields never reach the app.
+function _stripInternal(items) {
+  for (var i = 0; i < items.length; i++) {
+    delete items[i]._path;
+    delete items[i]._year;
+    delete items[i]._cat;
+  }
+  return items;
+}
+
+function _applyCovers(items, covers) {
+  for (var i = 0; i < items.length; i++) {
+    var c = covers[items[i]._path];
+    if (c) items[i].cover = c;
+  }
+  return items;
+}
+
 // --- Provider API -----------------------------------------------------------
 function getInfo() {
   var names = { movies: 'DhakaFlix Movies', series: 'DhakaFlix Series', anime: 'DhakaFlix Anime' };
   return {
     name: names[KIND], lang: 'en', baseUrl: 'http://172.16.50.4/',
     logo: 'https://mamun015.github.io/zangetsu-dhakaflix/logo.png',
-    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.1.1'
+    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.1.2'
   };
 }
 
@@ -298,7 +346,7 @@ function getHome(opts) {
   return _mapLimit(cats, 3, function (c) {
     var load = KIND === 'series' ? _seriesTitles(c) : _homeItems(c);
     return load.then(function (items) {
-      if (items.length) rows.push({ title: c.name, items: items });
+      if (items.length) rows.push({ title: c.name, items: _stripInternal(items) });
     });
   }).then(function () { return rows; });
 }
@@ -316,7 +364,9 @@ function _homeItems(c) {
       if (_looksLikeBucket(e.name)) buckets.push(e); else titles.push(e);
     }
     var directTitles = titles.slice(0, 120).map(function (e) { return _item(e.name, e.url, c); });
-    if (!buckets.length) return directTitles;
+    if (!buckets.length) {
+      return _coversFor(_catUrl(c)).then(function (cov) { return _applyCovers(directTitles, cov); });
+    }
 
     buckets.sort(function (a, b) {
       var ay = _bucketYear(a.name), by = _bucketYear(b.name);
@@ -327,9 +377,14 @@ function _homeItems(c) {
     var out = [];
     return _mapLimit(buckets.slice(0, 2), 2, function (b) {
       return _list(b.url).then(function (inner) {
+        var items = [];
         for (var k = 0; k < inner.length; k++) {
-          if (inner[k].folder) out.push(_item(inner[k].name, inner[k].url, c));
+          if (inner[k].folder) items.push(_item(inner[k].name, inner[k].url, c));
         }
+        return _coversFor(b.url).then(function (cov) {
+          _applyCovers(items, cov);
+          out = out.concat(items);
+        });
       });
     }).then(function () {
       return out.concat(directTitles).slice(0, 60);
@@ -361,9 +416,14 @@ function _seriesTitles(c) {
     var out = [];
     return _mapLimit(groups, 4, function (g) {
       return _list(g.url).then(function (inner) {
+        var items = [];
         for (var k = 0; k < inner.length; k++) {
-          if (inner[k].folder) out.push(_item(inner[k].name, inner[k].url, c));
+          if (inner[k].folder) items.push(_item(inner[k].name, inner[k].url, c));
         }
+        return _coversFor(g.url).then(function (cov) {
+          _applyCovers(items, cov);
+          out = out.concat(items);
+        });
       });
     }).then(function () {
       var all = out.concat(titles.map(function (e) { return _item(e.name, e.url, c); }));
@@ -434,7 +494,13 @@ function search(query, page, opts) {
   if (_searchCache[key]) return Promise.resolve(_searchCache[key]);
   var pattern = _regexEscape(key);
   var cats = _myCategories();
-  return _mapLimit(cats, 3, function (c) { return _searchCategory(c, pattern); }).then(function (lists) {
+  return _mapLimit(cats, 3, function (c) {
+    return Promise.all([_searchCategory(c, pattern), _coversFor(_catUrl(c))]).then(function (pair) {
+      var hits = pair[0] || [];
+      _applyCovers(hits, pair[1] || {});
+      return hits;
+    });
+  }).then(function (lists) {
     var out = [], seen = {};
     for (var i = 0; i < lists.length; i++) {
       for (var k = 0; k < lists[i].length; k++) {
@@ -456,7 +522,7 @@ function search(query, page, opts) {
       if (at !== bt) return at - bt;
       return a.title < b.title ? -1 : a.title > b.title ? 1 : 0;
     });
-    var capped = out.slice(0, 80);
+    var capped = _stripInternal(out.slice(0, 80));
     if (capped.length) _searchCache[key] = capped;
     return capped;
   });
@@ -511,8 +577,7 @@ function getDetail(url, opts) {
     // with the folder title ("Dune (1984)"), not the release filename.
     if (vids.length === 1 && !folders.length) {
       return _detail(u, title, poster, [{
-        id: vids[0].url, title: title, number: 1, url: vids[0].url,
-        _n: 1, _size: vids[0].size || 0, _season: null
+        id: vids[0].url, title: title, number: 1, url: vids[0].url
       }]);
     }
 
@@ -578,7 +643,9 @@ function _detail(url, title, poster, episodes) {
     id: url, title: title, url: url, description: null,
     cover: poster || null, status: 'unknown', genres: [], studios: [],
     type: KIND === 'anime' ? 'anime' : 'movie', sourceId: SOURCE_ID,
-    episodes: episodes, year: _yearOf(title)
+    // MediaDetail.year is a String? in the app — a number here made the whole
+    // detail fail to parse, which showed up as an empty episode list.
+    episodes: episodes, year: (_yearOf(title) == null ? null : String(_yearOf(title)))
   };
 }
 
