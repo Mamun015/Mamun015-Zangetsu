@@ -1,0 +1,36 @@
+{
+  "name": "DhakaFlix for Zangetsu",
+  "description": "Zangetsu sources for the DhakaFlix BDIX file server: movies, TV series and anime straight from its h5ai index.",
+  "sources": [
+    {
+      "id": "dhakaflix_movies",
+      "name": "DhakaFlix Movies",
+      "version": "1.1.0",
+      "type": "movie",
+      "lang": "en",
+      "file": "sources/dhakaflix.js",
+      "logo": "https://raw.githubusercontent.com/Mamun015/zangetsu-dhakaflix/main/logo.png",
+      "nsfw": false
+    },
+    {
+      "id": "dhakaflix_series",
+      "name": "DhakaFlix Series",
+      "version": "1.1.0",
+      "type": "movie",
+      "lang": "en",
+      "file": "sources/dhakaflix.js",
+      "logo": "https://raw.githubusercontent.com/Mamun015/zangetsu-dhakaflix/main/logo.png",
+      "nsfw": false
+    },
+    {
+      "id": "dhakaflix_anime",
+      "name": "DhakaFlix Anime",
+      "version": "1.1.0",
+      "type": "anime",
+      "lang": "en",
+      "file": "sources/dhakaflix.js",
+      "logo": "https://raw.githubusercontent.com/Mamun015/zangetsu-dhakaflix/main/logo.png",
+      "nsfw": false
+    }
+  ]
+}
