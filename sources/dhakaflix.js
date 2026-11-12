@@ -287,7 +287,7 @@ function getInfo() {
   return {
     name: names[KIND], lang: 'en', baseUrl: 'http://172.16.50.4/',
     logo: 'https://mamun015.github.io/zangetsu-dhakaflix/logo.png',
-    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.1.0'
+    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.1.1'
   };
 }
 
@@ -296,28 +296,53 @@ function getInfo() {
 function getHome(opts) {
   var cats = _myCategories(), rows = [];
   return _mapLimit(cats, 3, function (c) {
-    var load = KIND === 'series' ? _seriesTitles(c) : _groupItems(c);
+    var load = KIND === 'series' ? _seriesTitles(c) : _homeItems(c);
     return load.then(function (items) {
       if (items.length) rows.push({ title: c.name, items: items });
     });
   }).then(function () { return rows; });
 }
 
-// Movie / anime home row: the category's year or letter groups. Tapping one
-// lists its films as cards, which play straight away.
-function _groupItems(c) {
+// Movie / anime home row: real film titles, not year buckets. One request for
+// the category, one each for the two newest year folders — so the row shows
+// "40 Acres (2024)" instead of "(2024)". Older years stay reachable by search
+// and through the year cards on a bucket's own page.
+function _homeItems(c) {
   return _list(_catUrl(c)).then(function (children) {
-    var items = [], seen = {};
-    for (var i = 0; i < children.length && items.length < 120; i++) {
+    var buckets = [], titles = [];
+    for (var i = 0; i < children.length; i++) {
       var e = children[i];
-      if (!e.folder || seen[e.url]) continue;
-      seen[e.url] = 1;
-      var it = _item(e.name, e.url, c);
-      it.title = c.name + ' \u00b7 ' + it.title;
-      items.push(it);
+      if (!e.folder) continue;
+      if (_looksLikeBucket(e.name)) buckets.push(e); else titles.push(e);
     }
-    return items;
+    var directTitles = titles.slice(0, 120).map(function (e) { return _item(e.name, e.url, c); });
+    if (!buckets.length) return directTitles;
+
+    buckets.sort(function (a, b) {
+      var ay = _bucketYear(a.name), by = _bucketYear(b.name);
+      if (ay === by) return a.name < b.name ? 1 : -1;
+      return (by == null ? -1 : by) - (ay == null ? -1 : ay);
+    });
+
+    var out = [];
+    return _mapLimit(buckets.slice(0, 2), 2, function (b) {
+      return _list(b.url).then(function (inner) {
+        for (var k = 0; k < inner.length; k++) {
+          if (inner[k].folder) out.push(_item(inner[k].name, inner[k].url, c));
+        }
+      });
+    }).then(function () {
+      return out.concat(directTitles).slice(0, 60);
+    });
   });
+}
+
+// The year a bucket folder stands for, so the home row can start at the
+// newest one. "(2024)", "(1995) & Before", "(2023) 1080p" all yield a year.
+function _bucketYear(name) {
+  var n = _cleanName(name);
+  var m = n.match(/\((\d{4})/) || n.match(/^(\d{4})\s*&/i) || n.match(/^(\d{4})/);
+  return m ? parseInt(m[1], 10) : null;
 }
 
 // Series home row: real shows, not letter buckets. One request for the
@@ -350,8 +375,11 @@ function _seriesTitles(c) {
 // "TV Series \u2605 0 \u2014 9" / "(2024)" / "A \u2014 F" style bucket folders.
 function _looksLikeBucket(name) {
   var n = _cleanName(name);
-  if (/^\(\d{4}/.test(n)) return true;
-  if (n.indexOf('\u2014') >= 0) return true;
+  if (/^\(\d{4}/.test(n)) return true;                     // "(2024)", "(1995) & Before"
+  if (/^\d{4}$/.test(n)) return true;                        // "2001"
+  if (/^\d{4}\s*&\s*(before|after)$/i.test(n)) return true;  // "2000 & Before"
+  if (/^\d{4}\s*[-\u2013]\s*\d{4}$/.test(n)) return true;    // "1960-1994"
+  if (n.indexOf('\u2014') >= 0) return true;                 // "TV Series \u2605 0 \u2014 9"
   if (/^\d{1,2}$/.test(n)) return true;
   return false;
 }
@@ -563,13 +591,20 @@ function getEpisodes(url, opts) {
 // with Range support, so seeking works without any proxy.
 function getVideoSources(episodeUrl) {
   var u = String(episodeUrl);
-  if (!/\/$/.test(u)) return Promise.resolve([_source(u, _quality(_safeDecode(u)))]);
+  // A trailing slash is the usual folder marker, but the app is free to strip
+  // it — the real test is whether the path names a media file at all. Missing
+  // that made a card resolve to a folder URL and the player fail to open it.
+  var looksLikeFile = VIDEO_EXT.test(_safeDecode(u).split('?')[0]);
+  if (looksLikeFile) return Promise.resolve([_source(u, _quality(_safeDecode(u)))]);
   return _list(u).then(function (children) {
     var vids = _videos(children);
     if (vids.length) return _sourcesFrom(vids);
     var subs = [];
     for (var i = 0; i < children.length; i++) if (children[i].folder) subs.push(children[i]);
     if (!subs.length) throw new Error('DhakaFlix: \u098f\u0987 \u09ab\u09cb\u09b2\u09cd\u09a1\u09be\u09b0\u09c7 \u0995\u09cb\u09a8\u09cb \u09ad\u09bf\u09a1\u09bf\u0993 \u09ab\u09be\u0987\u09b2 \u09a8\u09c7\u0987');
+    // Never fan out over a whole year/list folder: a card that is really a
+    // bucket would fire hundreds of requests and look like "won't play".
+    if (subs.length > 8) subs = subs.slice(0, 3);
     // A show's card resolves to its first season only: mixing seasons into
     // one source list would label unrelated episodes as one stream.
     var seasonSubs = [];
