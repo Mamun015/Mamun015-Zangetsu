@@ -335,7 +335,7 @@ function getInfo() {
   return {
     name: names[KIND], lang: 'en', baseUrl: 'http://172.16.50.4/',
     logo: 'https://mamun015.github.io/zangetsu-dhakaflix/logo.png',
-    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.1.2'
+    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.1.3'
   };
 }
 
@@ -662,7 +662,10 @@ function getVideoSources(episodeUrl) {
   // it — the real test is whether the path names a media file at all. Missing
   // that made a card resolve to a folder URL and the player fail to open it.
   var looksLikeFile = VIDEO_EXT.test(_safeDecode(u).split('?')[0]);
-  if (looksLikeFile) return Promise.resolve([_source(u, _quality(_safeDecode(u)))]);
+  if (looksLikeFile) {
+    var name = _segName(u);
+    return Promise.resolve([_source(u, _quality(name), _labelFor(name))]);
+  }
   return _list(u).then(function (children) {
     var vids = _videos(children);
     if (vids.length) return _sourcesFrom(vids);
@@ -690,21 +693,68 @@ function getVideoSources(episodeUrl) {
   });
 }
 
+// BDIX folders hold one release per quality, usually HEVC/x265 10-bit in an
+// .mkv — a codec a lot of phones cannot decode, and the player then reports a
+// link that "failed to open". So rank the files: an .mp4 with H.264 goes
+// first, 10-bit HEVC last, and every alternative is offered as its own source
+// so the viewer can switch in the Sources sheet.
+function _scoreFile(name) {
+  var n = String(name).toLowerCase();
+  var s = 0;
+  if (/\.mp4$/.test(n)) s += 100;
+  else if (/\.mkv$/.test(n)) s += 60;
+  else if (/\.(m4v|mov)$/.test(n)) s += 50;
+  else s -= 20;
+  if (/x264|h[._]?264|avc/.test(n)) s += 40;
+  if (/x265|h[._]?265|hevc/.test(n)) s -= 10;
+  if (/10[ _-]?bit/.test(n)) s -= 25;
+  if (/8[ _-]?bit/.test(n)) s += 10;
+  if (/\.(avi|wmv|flv|ts|m2ts)$/.test(n)) s -= 30;
+  var q = _quality(name);
+  if (q === '1080p') s += 6;
+  else if (q === '720p') s += 5;
+  else if (q === '2160p' || q === '4k') s -= 15;
+  return s;
+}
+
+function _labelFor(name) {
+  var n = String(name).toLowerCase();
+  var bits = [];
+  var q = _quality(name);
+  if (q) bits.push(q);
+  if (/\.mp4$/.test(n)) bits.push('MP4');
+  else if (/\.mkv$/.test(n)) bits.push('MKV');
+  if (/x264|h[._]?264|avc/.test(n)) bits.push('H.264');
+  else if (/x265|h[._]?265|hevc/.test(n)) bits.push('HEVC');
+  if (/10[ _-]?bit/.test(n)) bits.push('10-bit');
+  else if (/8[ _-]?bit/.test(n)) bits.push('8-bit');
+  return bits.join(' \u00b7 ');
+}
+
 function _sourcesFrom(vids) {
-  vids.sort(function (a, b) { return b.size - a.size; });
+  var list = vids.slice(0);
+  list.sort(function (a, b) {
+    var d = _scoreFile(b.name) - _scoreFile(a.name);
+    if (d !== 0) return d;
+    return b.size - a.size;
+  });
   var out = [];
-  for (var i = 0; i < vids.length && out.length < 5; i++) out.push(_source(vids[i].url, _quality(vids[i].name)));
+  for (var i = 0; i < list.length && out.length < 5; i++) {
+    out.push(_source(list[i].url, _quality(list[i].name), _labelFor(list[i].name)));
+  }
   return out;
 }
 
-function _source(url, quality) {
+function _source(url, quality, label) {
   var isMp4 = /\.(mp4|m4v|mov)$/i.test(url);
   return {
     url: url,
     quality: quality || null,
-    label: null,
+    label: label || null,
     container: isMp4 ? 'mp4' : 'unknown',
-    headers: { 'User-Agent': UA },
+    // No custom headers: the server does not check them, and a header value
+    // with a comma can be mangled on its way into the player.
+    headers: null,
     kind: 'raw',
     audioLang: null,
     subtitles: []
