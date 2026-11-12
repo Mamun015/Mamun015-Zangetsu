@@ -59,4 +59,8 @@ node js_harness/host.mjs      # Zangetsu রিপোর হেল্পার
 [Zangetsu-র `providers/_template.js`](https://github.com/Spyou/Zangetsu/blob/main/providers/_template.js)
 দেখো।
 
-লাইসেন্স: MIT।
+## লাইসেন্স
+
+GNU General Public License v3.0 (GPL-3.0)। Zangetsu অ্যাপও GPL-3.0, তাই এই সোর্স
+একই লাইসেন্সে রাখা হয়েছে — কেউ ব্যবহার বা বদল করলে কোডও খোলা রাখতে হবে।
+বিস্তারিত `LICENSE` ফাইলে।
