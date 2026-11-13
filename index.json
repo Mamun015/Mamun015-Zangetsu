@@ -5,31 +5,31 @@
     {
       "id": "dhakaflix_movies",
       "name": "DhakaFlix Movies",
-      "version": "1.6.1",
+      "version": "1.6.2",
       "type": "movie",
       "lang": "en",
       "file": "sources/dhakaflix.js",
-      "logo": "https://raw.githubusercontent.com/Mamun015-Zangetsu/main/logo.png",
+      "logo": "https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png",
       "nsfw": false
     },
     {
       "id": "dhakaflix_series",
       "name": "DhakaFlix Series",
-      "version": "1.6.1",
+      "version": "1.6.2",
       "type": "movie",
       "lang": "en",
       "file": "sources/dhakaflix.js",
-      "logo": "https://raw.githubusercontent.com/Mamun015-Zangetsu/main/logo.png",
+      "logo": "https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png",
       "nsfw": false
     },
     {
       "id": "dhakaflix_anime",
       "name": "DhakaFlix Anime",
-      "version": "1.6.1",
+      "version": "1.6.2",
       "type": "anime",
       "lang": "en",
       "file": "sources/dhakaflix.js",
-      "logo": "https://raw.githubusercontent.com/Mamun015-Zangetsu/main/logo.png",
+      "logo": "https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png",
       "nsfw": false
     }
   ]

@@ -181,14 +181,19 @@ function _gated(host, run) {
   });
 }
 
-function _h5ai(dirUrl, payload) {
-  return _gated(_origin(dirUrl), function () { return _h5aiDirect(dirUrl, payload); });
+function _h5ai(dirUrl, payload, timeoutMs) {
+  return _gated(_origin(dirUrl), function () { return _h5aiDirect(dirUrl, payload, timeoutMs); });
 }
 
-function _h5aiDirect(dirUrl, payload) {
+function _h5aiDirect(dirUrl, payload, timeoutMs) {
   return fetch(dirUrl, {
     method: 'POST',
     headers: { 'User-Agent': UA, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    // The host's own per-request timeout. Auto Resolve gives the whole chain
+    // five seconds, so every request says how long it may take instead of
+    // waiting for the app's fifteen-second cap: a stalled share then costs
+    // one empty answer, not the whole probe.
+    timeoutMs: timeoutMs || LIST_TIMEOUT_MS,
     body: JSON.stringify(payload)
   }).then(function (r) {
     if (!r || !r.ok) throw new Error('DhakaFlix: HTTP ' + (r ? r.status : '?'));
@@ -200,10 +205,10 @@ function _h5aiDirect(dirUrl, payload) {
 }
 
 // h5ai's items[] returns the ancestors too; keep only the direct children.
-function _children(dirUrl) {
+function _children(dirUrl, timeoutMs) {
   var href = _path(dirUrl);
   var want = href.replace(/\/+$/, '') + '/';
-  return _h5ai(dirUrl, { action: 'get', items: { href: want, what: 1 } }).then(function (j) {
+  return _h5ai(dirUrl, { action: 'get', items: { href: want, what: 1 } }, timeoutMs).then(function (j) {
     var items = j.items || [], out = [];
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
@@ -230,9 +235,12 @@ function _toEntry(it, server) {
 // ever gets locked down.
 var RE_H5AI = /<td class="fb-i"><img src="[^"]*" alt="([^"]*)"\s*\/?><\/td><td class="fb-n"><a href="([^"]*)">([\s\S]*?)<\/a><\/td><td class="fb-d">([\s\S]*?)<\/td><td class="fb-s">([\s\S]*?)<\/td>/g;
 
-function _childrenHtml(dirUrl) {
+function _childrenHtml(dirUrl, timeoutMs) {
   return _gated(_origin(dirUrl), function () {
-    return fetch(dirUrl, { headers: { 'User-Agent': UA, 'Accept': 'text/html' } });
+    return fetch(dirUrl, {
+      headers: { 'User-Agent': UA, 'Accept': 'text/html' },
+      timeoutMs: timeoutMs || LIST_TIMEOUT_MS
+    });
   }).then(function (r) {
     if (!r || !r.ok) throw new Error('DhakaFlix: HTTP ' + (r ? r.status : '?'));
     var html = String(r.body || ''), out = [], m;
@@ -258,14 +266,14 @@ function _childrenHtml(dirUrl) {
 var _listCache = {};
 var LIST_TTL_MS = 120000;
 
-function _list(dirUrl) {
+function _list(dirUrl, timeoutMs) {
   var key = String(dirUrl).replace(/\/+$/, '');
   var hit = _listCache[key];
   if (hit && (Date.now() - hit.at) < LIST_TTL_MS) return Promise.resolve(hit.items.slice());
-  return _children(dirUrl).then(function (items) {
+  return _children(dirUrl, timeoutMs).then(function (items) {
     if (items.length) return items;
-    return _childrenHtml(dirUrl);
-  }).catch(function () { return _childrenHtml(dirUrl); }).then(function (items) {
+    return _childrenHtml(dirUrl, timeoutMs);
+  }).catch(function () { return _childrenHtml(dirUrl, timeoutMs); }).then(function (items) {
     _listCache[key] = { at: Date.now(), items: items };
     return items.slice();
   });
@@ -637,6 +645,10 @@ function _alternativeFiles(folderUrl, folderName) {
 // Auto Resolve probe has five seconds for match + episodes + sources, so the
 // hunt for another release gets a slice of that instead of all of it.
 function _withTimeout(promise, ms, fallback) {
+  // The app implements setTimeout by posting a message into the JS sandbox,
+  // and that delivery is not dependable while a provider call is waiting. A
+  // sandbox without timers still gets a correct (if slower) answer.
+  if (typeof setTimeout !== 'function') return promise;
   return new Promise(function (resolve) {
     var done = false;
     var timer = setTimeout(function () {
@@ -664,7 +676,7 @@ function getInfo() {
   return {
     name: names[KIND], lang: 'en', baseUrl: 'http://172.16.50.4/',
     logo: 'https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png',
-    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.6.1'
+    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.6.2'
   };
 }
 
@@ -798,8 +810,17 @@ function _regexEscape(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function _searchInScope(scope, pattern) {
-  return _h5ai(scope.host + scope.href, { action: 'get', search: { href: scope.href, pattern: pattern, ignorecase: true } })
+// Time budgets. Auto Resolve gives a source five seconds for match -> episodes
+// -> sources, and on the phone every request costs more than it does on a
+// laptop, so each one is capped on the HTTP side instead of trusting a timer
+// in the app's JS sandbox: a stalled share answers empty in three seconds at
+// worst instead of blocking the whole probe.
+var SEARCH_TIMEOUT_MS = 3000;
+var LIST_TIMEOUT_MS = 2500;
+var DETAIL_TIMEOUT_MS = 4000;
+
+function _searchInScope(scope, pattern, timeoutMs) {
+  return _h5ai(scope.host + scope.href, { action: 'get', search: { href: scope.href, pattern: pattern, ignorecase: true } }, timeoutMs || SEARCH_TIMEOUT_MS)
     .then(function (j) {
       var hits = j.search || [], out = [];
       for (var i = 0; i < hits.length; i++) {
@@ -828,24 +849,41 @@ function _scopesForKind() {
 // later search skips that listing request.
 var _scopeBuckets = {};
 
-// Always answers with a flat list of hits.
+// Categories big enough that one search over the whole tree does not finish
+// inside the budget: their letter/year buckets are worth the extra listing.
+// Everything else is searched directly, which is ONE request — the listing
+// itself was half the cost of a cold search.
+var SPLIT_SCOPES = {
+  '/DHAKA-FLIX-12/TV-WEB-Series/': 1,
+  '/DHAKA-FLIX-10/Anime%20%26%20Cartoon%20TV%20Series/': 1,
+  '/DHAKA-FLIX-7/English%20Movies/': 1
+};
+
+// Always answers with a flat list of hits, and never waits on more than the
+// requests it fired.
 function _searchScopeTree(scope, pattern, split) {
   if (split === false) return _searchInScope(scope, pattern);
   var cached = _scopeBuckets[scope.href];
   if (cached) return _searchBuckets(cached, pattern);
-  return _list(scope.host + scope.href).then(function (children) {
-    var buckets = [];
-    for (var i = 0; i < children.length; i++) {
-      if (children[i].folder && _looksLikeBucket(children[i].name)) buckets.push(children[i]);
-    }
-    if (buckets.length < 2 || buckets.length > 12) {
-      _scopeBuckets[scope.href] = null;
-      return _searchInScope(scope, pattern);
-    }
-    for (var bi = 0; bi < buckets.length; bi++) buckets[bi].host = scope.host;
-    _scopeBuckets[scope.href] = buckets;
-    return _searchBuckets(buckets, pattern);
-  }).catch(function () { return []; });
+  // First search of the session for a split scope: search it whole AND learn
+  // its buckets at the same time, so this answer is bounded by one search and
+  // every later search can go bucket by bucket.
+  var whole = _searchInScope(scope, pattern);
+  if (!SPLIT_SCOPES[scope.href]) return whole;
+  return Promise.all([
+    whole,
+    _list(scope.host + scope.href).then(function (children) {
+      var buckets = [];
+      for (var i = 0; i < children.length; i++) {
+        if (children[i].folder && _looksLikeBucket(children[i].name)) buckets.push(children[i]);
+      }
+      if (buckets.length >= 2 && buckets.length <= 12) {
+        for (var bi = 0; bi < buckets.length; bi++) buckets[bi].host = scope.host;
+        _scopeBuckets[scope.href] = buckets;
+      }
+      return null;
+    }).catch(function () { return null; })
+  ]).then(function (both) { return both[0] || []; });
 }
 
 function _searchBuckets(buckets, pattern) {
@@ -853,7 +891,7 @@ function _searchBuckets(buckets, pattern) {
   // deliver their titles. That keeps one busy folder from emptying the whole
   // search.
   return _mapLimit(buckets, 6, function (b) {
-    return _withTimeout(_searchInScope({ host: b.host, href: b.href }, pattern), 2000, []);
+    return _searchInScope({ host: b.host, href: b.href }, pattern, SEARCH_TIMEOUT_MS);
   }).then(function (groups) {
     var out = [];
     for (var i = 0; i < groups.length; i++) {
@@ -979,12 +1017,6 @@ function _isStrongHit(name, qKey) {
 // folders, each with its own bucket listing, is several seconds on a phone.
 // A slow scope is dropped, and the whole thing is capped so an answer always
 // arrives inside the app's five-second probe budget.
-// Auto Resolve gives a source five seconds for match -> episodes -> sources,
-// and the search is the slow part: on the phone's JS runtime every request
-// costs more than it does here. This budget leaves room for the two steps
-// after it.
-var SEARCH_DEADLINE_MS = 2500;
-
 function _searchScopes(scopes, pattern, qKey, canStopEarly) {
   return new Promise(function (resolve) {
     var lists = new Array(scopes.length);
@@ -1006,20 +1038,15 @@ function _searchScopes(scopes, pattern, qKey, canStopEarly) {
       for (var i = 0; i < lists.length; i++) out = out.concat(lists[i] || []);
       finish(out);
     }
-    // The answer is due NOW, with whatever has arrived. Waiting for a slow
-    // share was the bug behind "did not match this title": the only thing
-    // that ever ended this wait was the per-scope fallback, so a slow scope
-    // returned an empty list AND the caller got nothing at all. Partial
-    // results are worth far more than a punctual empty answer.
-    setTimeout(function () {
-      var out = [];
-      for (var i = 0; i < lists.length; i++) out = out.concat(lists[i] || []);
-      finish(out);
-    }, SEARCH_DEADLINE_MS);
-
+    // No timer-driven deadline: the app's setTimeout is a Dart callback that
+    // has to be posted back into the JS sandbox, and while a provider call is
+    // waiting on its requests that hop is not guaranteed to happen — a dead
+    // timer here left the search hanging until the app's own cap fired, which
+    // reads as "did not match this title". Every request carries its own HTTP
+    // timeout instead, so this settles on its own.
     for (var i = 0; i < scopes.length; i++) {
       (function (idx) {
-        _withTimeout(_searchScopeTree(scopes[idx], pattern), SEARCH_DEADLINE_MS + 300, []).then(function (hits) {
+        _searchScopeTree(scopes[idx], pattern).then(function (hits) {
           lists[idx] = hits || [];
           done++;
           if (canStopEarly && strongIn(lists[idx])) {
@@ -1051,16 +1078,19 @@ function search(query, page, opts) {
   var scopes = _scopesForKind();
   // When is it safe to stop at the first scope that has the title?
   //
-  // Not for a one-word query: "Batman" is a prefix of "Batman v Superman", and
-  // stopping early put that ahead of "Batman (1989)".
+  // Whenever a scope holds a folder whose name IS the title, once decorations
+  // are stripped — not merely one that starts with it. The check is
+  // `_isStrongHit`, whole-key equality, so a one-word query is safe too: a
+  // "Batman" folder and "Batman v Superman" are different keys, and the old
+  // rule that waited for every scope on one-word titles was written when the
+  // early exit accepted prefixes. Waiting cost the whole point of it: single
+  // word titles are the common case, and they paid for the slowest share.
   //
-  // Not for the anime source either: it carries both TV series and films, and
-  // the film folder answers from a faster share than the series one —
-  // "Jujutsu Kaisen" resolved to "Jujutsu Kaisen 0", "Chainsaw Man" to
-  // "-The Movie - Reze Arc". Its three scopes are fast enough to wait for all.
-  var uniqueWords = [];
-  for (var uw = 0; uw < qWords.length; uw++) if (uniqueWords.indexOf(qWords[uw]) < 0) uniqueWords.push(qWords[uw]);
-  var canStopEarly = KIND !== 'anime' && uniqueWords.length >= 2;
+  // Not for the anime source: it carries both TV series and films, and the
+  // film folder can be named exactly like the series — "Chainsaw Man" the
+  // movie would answer for "Chainsaw Man" the show. Its three scopes are fast
+  // enough to wait for all of them.
+  var canStopEarly = KIND !== 'anime';
   return _searchScopes(scopes, pattern, qKey, canStopEarly).then(function (list) {
     var out = [], seen = {};
     for (var k = 0; k < list.length; k++) {
@@ -1097,6 +1127,11 @@ function search(query, page, opts) {
     var capped = _stripInternal(out.slice(0, 80));
     if (capped.length) _searchCache[key] = capped;
     return capped;
+  }).catch(function () {
+    // A search that blows up must look like "nothing found" to the app, not
+    // like a broken source: an exception here is what puts "did not match
+    // this title" in front of the viewer.
+    return [];
   });
 }
 
