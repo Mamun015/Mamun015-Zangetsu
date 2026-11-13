@@ -258,6 +258,13 @@ function _pretty(name) {
   n = n.replace(/\[[^\]]*\]/g, ' ');                       // [Dual Audio][Hindi 5.1+English 5.1]
   n = n.replace(/\(\s*(?:dual|multi)\s*audio\s*\)/gi, ' '); // (Dual Audio)
   for (var i = 0; i < 3; i++) n = n.replace(RE_TAG, ' ');   // repeated: adjacent tags
+  // Every parenthetical goes: the type marker ("(TV Cartoon 2019\u20132024)"),
+  // the year, and the alternate title ("Money Heist (La Casa de Papel)"). The
+  // app compares the WHOLE title after stripping only its own decorations, so
+  // any leftover bracket would make the match fail.
+  n = n.replace(/\([^)]*\)/g, ' ');
+  // Platform tags the app's decoration rule does not know about.
+  n = n.replace(/\s(?:AMZN|NF|HMAX|HBO|PRIME|DISNEY|APPLE|SONY|PARAMOUNT|PEACOCK)(?=\s*[\[(]|$)/gi, ' ');
   n = n.replace(/\s*[-_.]+\s*$/g, ' ').replace(/^[\s\-_.]+/, '');
   n = n.replace(/\s*[-\u2013]\s*[A-Za-z0-9]{2,12}$/, '');   // trailing "-GalaxyRG"/"-MsMod"
   n = n.replace(/\s{2,}/g, ' ');
@@ -607,7 +614,7 @@ function getInfo() {
   return {
     name: names[KIND], lang: 'en', baseUrl: 'http://172.16.50.4/',
     logo: 'https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png',
-    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.4.0'
+    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.4.1'
   };
 }
 
@@ -863,7 +870,12 @@ function search(query, page, opts) {
   var qWords = _queryWords(q).map(function (w) { return w.toLowerCase(); });
   var qNorm = _normTitle(q);
   var scopes = _scopesForKind();
-  return _mapLimit(scopes, 6, function (sc) { return _searchScopeTree(sc, pattern); }).then(function (lists) {
+  // A scope that takes too long is dropped rather than held up: the folders
+  // that answer in time are enough, and Auto Resolve has five seconds for the
+  // whole chain.
+  return _mapLimit(scopes, 6, function (sc) {
+    return _withTimeout(_searchScopeTree(sc, pattern), 3000, []);
+  }).then(function (lists) {
     var out = [], seen = {};
     for (var i = 0; i < lists.length; i++) {
       var list = lists[i] || [];
@@ -1021,7 +1033,7 @@ function _poster(entries) {
 }
 
 function _detail(url, title, rawTitle, poster, episodes, withMeta) {
-  var year = _yearOf(title);
+  var year = _yearOf(rawTitle || title);
   var base = {
     id: url, title: title, url: url, description: null,
     cover: poster || null, banner: null, status: 'unknown', genres: [], studios: [],
