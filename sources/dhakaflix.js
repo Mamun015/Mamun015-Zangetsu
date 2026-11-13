@@ -38,14 +38,15 @@ var SERVERS = [
 // matches every episode file of every show.
 var SEARCH_SCOPES = {
   movies: [
-    { host: 'http://172.16.50.7',  href: '/DHAKA-FLIX-7/English%20Movies/' },
-    { host: 'http://172.16.50.7',  href: '/DHAKA-FLIX-7/Foreign%20Language%20Movies/' },
-    { host: 'http://172.16.50.7',  href: '/DHAKA-FLIX-7/Kolkata%20Bangla%20Movies/' },
-    { host: 'http://172.16.50.7',  href: '/DHAKA-FLIX-7/3D%20Movies/' },
+    // The 1080p share answers first with the release the viewer actually
+    // wants; the older share holds the 720p copies.
     { host: 'http://172.16.50.14', href: '/DHAKA-FLIX-14/English%20Movies%20%281080p%29/' },
     { host: 'http://172.16.50.14', href: '/DHAKA-FLIX-14/Hindi%20Movies/' },
     { host: 'http://172.16.50.14', href: '/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/' },
-    { host: 'http://172.16.50.14', href: '/DHAKA-FLIX-14/IMDb%20Top-250%20Movies/' }
+    { host: 'http://172.16.50.14', href: '/DHAKA-FLIX-14/IMDb%20Top-250%20Movies/' },
+    { host: 'http://172.16.50.7',  href: '/DHAKA-FLIX-7/English%20Movies/' },
+    { host: 'http://172.16.50.7',  href: '/DHAKA-FLIX-7/Foreign%20Language%20Movies/' },
+    { host: 'http://172.16.50.7',  href: '/DHAKA-FLIX-7/Kolkata%20Bangla%20Movies/' }
   ],
   series: [
     { host: 'http://172.16.50.12', href: '/DHAKA-FLIX-12/TV-WEB-Series/' },
@@ -150,7 +151,41 @@ function _segName(path) {
   return _safeDecode(i >= 0 ? p.slice(i + 1) : p).replace(/\+/g, ' ');
 }
 
+// A search fans out over several category folders at once, and a big one can
+// ask for a dozen buckets in the same breath. The boxes behind these shares
+// answer slower the more requests land at the same time — a flood of them is
+// what made the app report "took too long to answer". So requests to one
+// server are queued: four run, the rest wait their turn, in order.
+var _hostQueues = {};
+var HOST_CONCURRENCY = 4;
+
+function _gated(host, run) {
+  var q = _hostQueues[host];
+  if (!q) q = _hostQueues[host] = { active: 0, wait: [] };
+  return new Promise(function (resolve, reject) {
+    function next() {
+      var start = q.wait.shift();
+      if (start) start();
+    }
+    function start() {
+      q.active++;
+      var p;
+      try { p = run(); } catch (e) { p = Promise.reject(e); }
+      Promise.resolve(p).then(function (v) {
+        q.active--; next(); resolve(v);
+      }, function (e) {
+        q.active--; next(); reject(e);
+      });
+    }
+    if (q.active < HOST_CONCURRENCY) start(); else q.wait.push(start);
+  });
+}
+
 function _h5ai(dirUrl, payload) {
+  return _gated(_origin(dirUrl), function () { return _h5aiDirect(dirUrl, payload); });
+}
+
+function _h5aiDirect(dirUrl, payload) {
   return fetch(dirUrl, {
     method: 'POST',
     headers: { 'User-Agent': UA, 'Content-Type': 'application/json', 'Accept': 'application/json' },
@@ -196,7 +231,9 @@ function _toEntry(it, server) {
 var RE_H5AI = /<td class="fb-i"><img src="[^"]*" alt="([^"]*)"\s*\/?><\/td><td class="fb-n"><a href="([^"]*)">([\s\S]*?)<\/a><\/td><td class="fb-d">([\s\S]*?)<\/td><td class="fb-s">([\s\S]*?)<\/td>/g;
 
 function _childrenHtml(dirUrl) {
-  return fetch(dirUrl, { headers: { 'User-Agent': UA, 'Accept': 'text/html' } }).then(function (r) {
+  return _gated(_origin(dirUrl), function () {
+    return fetch(dirUrl, { headers: { 'User-Agent': UA, 'Accept': 'text/html' } });
+  }).then(function (r) {
     if (!r || !r.ok) throw new Error('DhakaFlix: HTTP ' + (r ? r.status : '?'));
     var html = String(r.body || ''), out = [], m;
     var origin = _origin(dirUrl);
@@ -627,7 +664,7 @@ function getInfo() {
   return {
     name: names[KIND], lang: 'en', baseUrl: 'http://172.16.50.4/',
     logo: 'https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png',
-    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.5.0'
+    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.6.0'
   };
 }
 
@@ -922,6 +959,71 @@ function _closeEnough(name, qWords, qKey) {
   return hits / qWords.length >= 0.75;
 }
 
+// Whether a folder IS the title that was asked for — same words, with only
+// the release decorations removed ("Breaking Bad (TV Series 2008–2013) 1080p"
+// is "Breaking Bad"). This is the test that may end the search early, so it is
+// deliberately strict. A prefix is not enough: "Batman" is a prefix of
+// "Batman v Superman", "Money Heist" of "Money Heist-The Phenomenon" and
+// "Jujutsu Kaisen" of "Jujutsu Kaisen 0" — each of those answered a search for
+// the main title and played the wrong thing.
+function _isStrongHit(name, qKey) {
+  var key = _matchKey(_pretty(name));
+  if (!key || !qKey) return false;
+  return key === qKey;
+}
+
+// Search every scope at once and STOP as soon as one of them holds the title.
+// The scopes run in parallel over the local network, and the fastest one is
+// usually a few hundred milliseconds — but waiting for all of them is what
+// made Auto Resolve time out ("took too long to answer"): eight category
+// folders, each with its own bucket listing, is several seconds on a phone.
+// A slow scope is dropped, and the whole thing is capped so an answer always
+// arrives inside the app's five-second probe budget.
+function _searchScopes(scopes, pattern, qKey, canStopEarly) {
+  return new Promise(function (resolve) {
+    var lists = new Array(scopes.length);
+    var done = 0, settled = false;
+    function finish(lists) {
+      if (settled) return;
+      settled = true;
+      resolve(lists || []);
+    }
+    function strongIn(hits) {
+      for (var i = 0; i < hits.length; i++) {
+        if (_isStrongHit(hits[i].name, qKey)) return true;
+      }
+      return false;
+    }
+    function settle() {
+      if (done < scopes.length) return;
+      var out = [];
+      for (var i = 0; i < lists.length; i++) out = out.concat(lists[i] || []);
+      finish(out);
+    }
+    setTimeout(function () { settle(); }, 4500);
+
+    for (var i = 0; i < scopes.length; i++) {
+      (function (idx) {
+        _withTimeout(_searchScopeTree(scopes[idx], pattern), 4500, []).then(function (hits) {
+          lists[idx] = hits || [];
+          done++;
+          if (canStopEarly && strongIn(lists[idx])) {
+            // This scope has the title. Its hits are the answer; the other
+            // scopes' hits would only add lower matches.
+            finish(lists[idx]);
+            return;
+          }
+          settle();
+        }).catch(function () {
+          lists[idx] = [];
+          done++;
+          settle();
+        });
+      })(i);
+    }
+  });
+}
+
 function search(query, page, opts) {
   var q = _trim(String(query || ''));
   if (!q) return Promise.resolve([]);
@@ -932,24 +1034,29 @@ function search(query, page, opts) {
   var qNorm = _normTitle(q);
   var qKey = _matchKey(q);
   var scopes = _scopesForKind();
-  // A scope that takes too long is dropped rather than held up: the folders
-  // that answer in time are enough, and Auto Resolve has five seconds for the
-  // whole chain.
-  return _mapLimit(scopes, 6, function (sc) {
-    return _withTimeout(_searchScopeTree(sc, pattern), 5000, []);
-  }).then(function (lists) {
+  // When is it safe to stop at the first scope that has the title?
+  //
+  // Not for a one-word query: "Batman" is a prefix of "Batman v Superman", and
+  // stopping early put that ahead of "Batman (1989)".
+  //
+  // Not for the anime source either: it carries both TV series and films, and
+  // the film folder answers from a faster share than the series one —
+  // "Jujutsu Kaisen" resolved to "Jujutsu Kaisen 0", "Chainsaw Man" to
+  // "-The Movie - Reze Arc". Its three scopes are fast enough to wait for all.
+  var uniqueWords = [];
+  for (var uw = 0; uw < qWords.length; uw++) if (uniqueWords.indexOf(qWords[uw]) < 0) uniqueWords.push(qWords[uw]);
+  var canStopEarly = KIND !== 'anime' && uniqueWords.length >= 2;
+  return _searchScopes(scopes, pattern, qKey, canStopEarly).then(function (list) {
     var out = [], seen = {};
-    for (var i = 0; i < lists.length; i++) {
-      var list = lists[i] || [];
-      for (var k = 0; k < list.length; k++) {
-        var r = list[k];
-        var norm = r.url.replace(/\/+$/, '').toLowerCase();
-        if (seen[norm]) continue;
-        seen[norm] = 1;
-        var tkey = _pretty(r.name).toLowerCase();
-        if (seen['t:' + tkey]) continue;
-        seen['t:' + tkey] = 1;
-        var item = _item(r.name, r.url, null);
+    for (var k = 0; k < list.length; k++) {
+      var r = list[k];
+      var norm = r.url.replace(/\/+$/, '').toLowerCase();
+      if (seen[norm]) continue;
+      seen[norm] = 1;
+      var tkey = _pretty(r.name).toLowerCase();
+      if (seen['t:' + tkey]) continue;
+      seen['t:' + tkey] = 1;
+      var item = _item(r.name, r.url, null);
         // Zangetsu accepts a source's result only when its title is EQUAL to
         // the catalogue's title once decorations are stripped — a folder called
         // "A Silent Voice-The Movie" therefore never matched "A Silent Voice",
@@ -959,9 +1066,8 @@ function search(query, page, opts) {
         // are this title get that: a search for "Shingeki no Kyojin" also
         // returns "Shingeki no Bahamut-Genesis", and labelling THAT with the
         // asked title would play the wrong show.
-        if (_closeEnough(r.name, qWords, qKey)) item.englishTitle = q;
-        out.push(item);
-      }
+      if (_closeEnough(r.name, qWords, qKey)) item.englishTitle = q;
+      out.push(item);
     }
     // Closest title first: the app picks its match from this list, so the
     // folder that really is the requested title has to be at the top.
