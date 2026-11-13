@@ -214,11 +214,24 @@ function _childrenHtml(dirUrl) {
   });
 }
 
+// One folder is listed twice in a playback chain: getEpisodes lists it to
+// build the episode card, then getVideoSources lists the same folder again to
+// find the files. Auto Resolve gives the whole chain five seconds, so the
+// second answer is served from here.
+var _listCache = {};
+var LIST_TTL_MS = 120000;
+
 function _list(dirUrl) {
+  var key = String(dirUrl).replace(/\/+$/, '');
+  var hit = _listCache[key];
+  if (hit && (Date.now() - hit.at) < LIST_TTL_MS) return Promise.resolve(hit.items.slice());
   return _children(dirUrl).then(function (items) {
     if (items.length) return items;
     return _childrenHtml(dirUrl);
-  }).catch(function () { return _childrenHtml(dirUrl); });
+  }).catch(function () { return _childrenHtml(dirUrl); }).then(function (items) {
+    _listCache[key] = { at: Date.now(), items: items };
+    return items.slice();
+  });
 }
 
 // "1150185 KB" / "1.2 GB" / "180 KB" -> bytes
@@ -614,7 +627,7 @@ function getInfo() {
   return {
     name: names[KIND], lang: 'en', baseUrl: 'http://172.16.50.4/',
     logo: 'https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png',
-    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.4.3'
+    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.5.0'
   };
 }
 
@@ -851,8 +864,9 @@ function _searchPattern(q) {
 
 // How close a result's title is to the query: every query word that shows up
 // in the title counts, and a title that starts with the query counts more.
-function _titleScore(title, queryWords, queryNorm) {
+function _titleScore(title, queryWords, queryNorm, queryKey) {
   var low = String(title).toLowerCase();
+  var key = _matchKey(title);
   var score = 0;
   for (var i = 0; i < queryWords.length; i++) {
     if (low.indexOf(queryWords[i]) >= 0) score += 10;
@@ -861,7 +875,51 @@ function _titleScore(title, queryWords, queryNorm) {
   // The whole query in the title ("Hunter x Hunter") beats a title that
   // merely mentions one of its words.
   if (queryNorm && low.indexOf(queryNorm) >= 0) score += 20;
+  // The folder IS the title, or the title plus extra words. This is what puts
+  // "Naruto" above "Naruto SD-Rock Lee & His Ninja Pals".
+  if (queryKey) {
+    if (key === queryKey) score += 100;
+    else if (key.indexOf(queryKey) === 0) score += 60;
+    else if (queryKey.indexOf(key) === 0) score += 30;
+  }
   return score;
+}
+
+// Words in a folder title that the query did not name. Two folders can score
+// the same when both contain the whole query — "…Kimetsu no Yaiba (TV
+// Cartoon)" and "…Kimetsu no Yaiba - To the Hashira Training" — and the one
+// with fewer strangers is the plainer, closer answer.
+function _extraWords(title, queryWords) {
+  var words = _queryWords(title).map(function (w) { return w.toLowerCase(); });
+  var extra = 0;
+  for (var i = 0; i < words.length; i++) {
+    if (queryWords.indexOf(words[i]) < 0) extra++;
+  }
+  return extra;
+}
+
+// The app's own title key: lowercase, "&" spelled out, everything that is not
+// a letter or a digit dropped. Used to decide whether a folder found by a
+// search is the title that was asked for.
+function _matchKey(s) {
+  return String(s || '').toLowerCase()
+    .replace(/[&\uFF06\uFE60]/g, 'and')
+    .replace(/[^a-z0-9\u0980-\u09ff]+/g, '');
+}
+
+// True when a folder name is this title, allowing for the extra words release
+// folders carry: a prefix either way ("A Silent Voice" / "A Silent Voice-The
+// Movie"), or nearly all of the query's significant words present ("Kimetsu no
+// Yaiba" / "Demon Slayer-Kimetsu no Yaiba"). A different show that merely
+// shares a word ("Shingeki no Bahamut-Genesis") fails both tests.
+function _closeEnough(name, qWords, qKey) {
+  var key = _matchKey(name);
+  if (!key || !qKey) return false;
+  if (key.indexOf(qKey) === 0 || qKey.indexOf(key) === 0) return true;
+  if (!qWords.length) return false;
+  var hits = 0;
+  for (var i = 0; i < qWords.length; i++) if (key.indexOf(qWords[i]) >= 0) hits++;
+  return hits / qWords.length >= 0.75;
 }
 
 function search(query, page, opts) {
@@ -872,6 +930,7 @@ function search(query, page, opts) {
   var pattern = _searchPattern(q);
   var qWords = _queryWords(q).map(function (w) { return w.toLowerCase(); });
   var qNorm = _normTitle(q);
+  var qKey = _matchKey(q);
   var scopes = _scopesForKind();
   // A scope that takes too long is dropped rather than held up: the folders
   // that answer in time are enough, and Auto Resolve has five seconds for the
@@ -890,14 +949,28 @@ function search(query, page, opts) {
         var tkey = _pretty(r.name).toLowerCase();
         if (seen['t:' + tkey]) continue;
         seen['t:' + tkey] = 1;
-        out.push(_item(r.name, r.url, null));
+        var item = _item(r.name, r.url, null);
+        // Zangetsu accepts a source's result only when its title is EQUAL to
+        // the catalogue's title once decorations are stripped — a folder called
+        // "A Silent Voice-The Movie" therefore never matched "A Silent Voice",
+        // and the whole source was rejected. Such a folder is the right show,
+        // so it is also offered under the asked title (the app compares the
+        // English title against the same wanted set). Only folders that really
+        // are this title get that: a search for "Shingeki no Kyojin" also
+        // returns "Shingeki no Bahamut-Genesis", and labelling THAT with the
+        // asked title would play the wrong show.
+        if (_closeEnough(r.name, qWords, qKey)) item.englishTitle = q;
+        out.push(item);
       }
     }
     // Closest title first: the app picks its match from this list, so the
     // folder that really is the requested title has to be at the top.
     out.sort(function (a, b) {
-      var as = _titleScore(a.title, qWords, qNorm), bs = _titleScore(b.title, qWords, qNorm);
+      var as = _titleScore(a.title, qWords, qNorm, qKey);
+      var bs = _titleScore(b.title, qWords, qNorm, qKey);
       if (as !== bs) return bs - as;
+      var ax = _extraWords(a.title, qWords), bx = _extraWords(b.title, qWords);
+      if (ax !== bx) return ax - bx;
       return a.title < b.title ? -1 : a.title > b.title ? 1 : 0;
     });
     var capped = _stripInternal(out.slice(0, 80));
@@ -1099,7 +1172,7 @@ function getVideoSources(episodeUrl, fast) {
     if (!playable) {
       var altPromise = _alternativeFiles(parent, _segName(parent));
       if (fast) {
-        return _withTimeout(altPromise, 1800, []).then(function (alt) {
+        return _withTimeout(altPromise, 1200, []).then(function (alt) {
           return _sourcesFromFiles(alt.concat(own));
         });
       }
@@ -1131,7 +1204,7 @@ function getVideoSources(episodeUrl, fast) {
       if (!anyPlayable) {
         var altPromise2 = _alternativeFiles(u, _segName(u));
         if (fast) {
-          return _withTimeout(altPromise2, 1800, []).then(function (alt) {
+          return _withTimeout(altPromise2, 1200, []).then(function (alt) {
             return _sourcesFromFiles(alt.concat(vids));
           });
         }
