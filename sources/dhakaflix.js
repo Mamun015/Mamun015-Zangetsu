@@ -664,7 +664,7 @@ function getInfo() {
   return {
     name: names[KIND], lang: 'en', baseUrl: 'http://172.16.50.4/',
     logo: 'https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png',
-    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.6.0'
+    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.6.1'
   };
 }
 
@@ -853,7 +853,7 @@ function _searchBuckets(buckets, pattern) {
   // deliver their titles. That keeps one busy folder from emptying the whole
   // search.
   return _mapLimit(buckets, 6, function (b) {
-    return _withTimeout(_searchInScope({ host: b.host, href: b.href }, pattern), 3000, []);
+    return _withTimeout(_searchInScope({ host: b.host, href: b.href }, pattern), 2000, []);
   }).then(function (groups) {
     var out = [];
     for (var i = 0; i < groups.length; i++) {
@@ -979,14 +979,20 @@ function _isStrongHit(name, qKey) {
 // folders, each with its own bucket listing, is several seconds on a phone.
 // A slow scope is dropped, and the whole thing is capped so an answer always
 // arrives inside the app's five-second probe budget.
+// Auto Resolve gives a source five seconds for match -> episodes -> sources,
+// and the search is the slow part: on the phone's JS runtime every request
+// costs more than it does here. This budget leaves room for the two steps
+// after it.
+var SEARCH_DEADLINE_MS = 2500;
+
 function _searchScopes(scopes, pattern, qKey, canStopEarly) {
   return new Promise(function (resolve) {
     var lists = new Array(scopes.length);
     var done = 0, settled = false;
-    function finish(lists) {
+    function finish(hits) {
       if (settled) return;
       settled = true;
-      resolve(lists || []);
+      resolve(hits || []);
     }
     function strongIn(hits) {
       for (var i = 0; i < hits.length; i++) {
@@ -1000,11 +1006,20 @@ function _searchScopes(scopes, pattern, qKey, canStopEarly) {
       for (var i = 0; i < lists.length; i++) out = out.concat(lists[i] || []);
       finish(out);
     }
-    setTimeout(function () { settle(); }, 4500);
+    // The answer is due NOW, with whatever has arrived. Waiting for a slow
+    // share was the bug behind "did not match this title": the only thing
+    // that ever ended this wait was the per-scope fallback, so a slow scope
+    // returned an empty list AND the caller got nothing at all. Partial
+    // results are worth far more than a punctual empty answer.
+    setTimeout(function () {
+      var out = [];
+      for (var i = 0; i < lists.length; i++) out = out.concat(lists[i] || []);
+      finish(out);
+    }, SEARCH_DEADLINE_MS);
 
     for (var i = 0; i < scopes.length; i++) {
       (function (idx) {
-        _withTimeout(_searchScopeTree(scopes[idx], pattern), 4500, []).then(function (hits) {
+        _withTimeout(_searchScopeTree(scopes[idx], pattern), SEARCH_DEADLINE_MS + 300, []).then(function (hits) {
           lists[idx] = hits || [];
           done++;
           if (canStopEarly && strongIn(lists[idx])) {
