@@ -1,11 +1,11 @@
 {
   "name": "Mamun015 Zangetsu Sources",
-  "description": "Zangetsu sources for BDIX file servers — movies, TV series and anime, straight from the local network.",
+  "description": "Zangetsu sources for BDIX file servers (DhakaFlix, Circle FTP, Dflix, ICC Ftp) — movies, TV series and anime, straight from the local network.",
   "sources": [
     {
       "id": "dhakaflix_movies",
       "name": "DhakaFlix Movies",
-      "version": "1.6.2",
+      "version": "1.7.0",
       "type": "movie",
       "lang": "en",
       "file": "sources/dhakaflix.js",
@@ -15,7 +15,7 @@
     {
       "id": "dhakaflix_series",
       "name": "DhakaFlix Series",
-      "version": "1.6.2",
+      "version": "1.7.0",
       "type": "movie",
       "lang": "en",
       "file": "sources/dhakaflix.js",
@@ -25,10 +25,50 @@
     {
       "id": "dhakaflix_anime",
       "name": "DhakaFlix Anime",
-      "version": "1.6.2",
+      "version": "1.7.0",
       "type": "anime",
       "lang": "en",
       "file": "sources/dhakaflix.js",
+      "logo": "https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png",
+      "nsfw": false
+    },
+    {
+      "id": "circleftp",
+      "name": "(BDIX) Circle FTP",
+      "version": "1.7.0",
+      "type": "movie",
+      "lang": "bn",
+      "file": "sources/bdix.js",
+      "logo": "https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png",
+      "nsfw": false
+    },
+    {
+      "id": "dflix_movies",
+      "name": "(BDIX) Dflix Movies",
+      "version": "1.7.0",
+      "type": "movie",
+      "lang": "bn",
+      "file": "sources/bdix.js",
+      "logo": "https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png",
+      "nsfw": false
+    },
+    {
+      "id": "dflix_series",
+      "name": "(BDIX) Dflix Series",
+      "version": "1.7.0",
+      "type": "movie",
+      "lang": "bn",
+      "file": "sources/bdix.js",
+      "logo": "https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png",
+      "nsfw": false
+    },
+    {
+      "id": "iccftp",
+      "name": "(BDIX) ICC Ftp",
+      "version": "1.7.0",
+      "type": "movie",
+      "lang": "bn",
+      "file": "sources/bdix.js",
       "logo": "https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png",
       "nsfw": false
     }

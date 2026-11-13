@@ -676,7 +676,7 @@ function getInfo() {
   return {
     name: names[KIND], lang: 'en', baseUrl: 'http://172.16.50.4/',
     logo: 'https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png',
-    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.6.2'
+    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.7.0'
   };
 }
 

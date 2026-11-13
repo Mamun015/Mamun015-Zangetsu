@@ -3,8 +3,8 @@
 Zangetsu অ্যাপের জন্য BDIX সোর্স সংগ্রহ। লোকাল নেটওয়ার্কের BDIX ফাইল সার্ভার
 থেকে মুভি, সিরিজ আর অ্যানিমে সরাসরি ব্রাউজ করে চালানো যায়।
 
-এখন আছে: **DhakaFlix** (মুভি / সিরিজ / অ্যানিমে)। ভবিষ্যতে আরও BDIX সাইট যোগ
-হবে — প্রতিটি সাইটের নিজস্ব `sources/<সাইটের-নাম>.js` ফাইল থাকবে।
+এখন আছে: **DhakaFlix** (মুভি / সিরিজ / অ্যানিমে), **Circle FTP**, **Dflix** (মুভি / সিরিজ), আর **ICC Ftp**।
+প্রতিটি সাইটের নিজস্ব কোড `sources/` ফোল্ডারে রাখা আছে।
 
 > ⚠️ এই সোর্সগুলো শুধু BDIX-সংযুক্ত লাইনে কাজ করে। অন্য নেটওয়ার্কে সার্ভারগুলো
 > ধরা পড়ে না, তাই লিস্ট ও স্ট্রিম ফাঁকা থাকে।
@@ -16,21 +16,25 @@ Zangetsu অ্যাপের জন্য BDIX সোর্স সংগ্র
 3. **Add repository** চাপো, এই লিংকটা দাও:
 
 ```
-https://raw.githubusercontent.com/Mamun015-Zangetsu/main/index.json
+https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/index.json
 ```
 
 4. লিস্টে আসা সোর্সগুলো ইনস্টল করো
 
 ## এখনকার সোর্সগুলো
 
-| সোর্স | কী আছে |
-|---|---|
-| **DhakaFlix Movies** | English Movies, English 1080p, Hindi, South Indian (+Hindi Dubbed), Kolkata Bangla, Foreign Language, IMDb Top 250, 3D, আর ভাষা-ভিত্তিক (Japanese, Korean, Chinese, Bangla Dubbing, Pakistani) |
-| **DhakaFlix Series** | TV & Web Series, Korean TV & Web Series, Cartoon TV Series, Awards & TV Shows, WWE & AEW Wrestling, Documentary |
-| **DhakaFlix Anime** | Anime TV Series, Animation Movies, Animation Movies 1080p |
+| সোর্স | ID | কী আছে |
+|---|---|---|
+| **DhakaFlix Movies** | `dhakaflix_movies` | English Movies, English 1080p, Hindi, South Indian (+Hindi Dubbed), Kolkata Bangla, Foreign Language, IMDb Top 250, 3D, আর ভাষা-ভিত্তিক |
+| **DhakaFlix Series** | `dhakaflix_series` | TV & Web Series, Korean TV & Web Series, Cartoon TV Series, Awards & TV Shows, WWE & AEW Wrestling, Documentary |
+| **DhakaFlix Anime** | `dhakaflix_anime` | Anime TV Series, Animation Movies, Animation Movies 1080p |
+| **(BDIX) Circle FTP** | `circleftp` | Circle FTP-এর JSON API থেকে মুভি ও সিরিজ (English/Foreign/Hindi/South/Animation/Anime/Documentary/WWE ইত্যাদি) |
+| **(BDIX) Dflix Movies** | `dflix_movies` | Dflix-এর English/Bangla/Hindi/Tamil/Animation/Others সিনেমা |
+| **(BDIX) Dflix Series** | `dflix_series` | Dflix-এর Foreign/Bangla/Hindi/South/Dubbed/Animation সিরিজ |
+| **(BDIX) ICC Ftp** | `iccftp` | ICC Ftp-এর মুভি ও সিজনভিত্তিক সিরিজ |
 
 ডিটেইল পেজে টাইটেলের আসল পোস্টার, গল্প, রেটিং, কাস্ট আর ট্র্যাকিং আইডি TMDB থেকে
-আসে (টাইটল আর বছর মিলিয়ে দেখা হয়, না মিললে সার্ভারের নিজস্ব পোস্টারই থাকে)।
+আসে (DhakaFlix-এ, টাইটল আর বছর মিলিয়ে দেখা হয়; না মিললে সার্ভারের নিজস্ব পোস্টারই থাকে)।
 
 ## Auto Resolve (Z Mode) দ্রুত রাখা
 
