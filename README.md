@@ -25,9 +25,12 @@ https://raw.githubusercontent.com/Mamun015-Zangetsu/main/index.json
 
 | সোর্স | কী আছে |
 |---|---|
-| **DhakaFlix Movies** | English Movies, English 1080p, Hindi, South Indian (+Hindi Dubbed), Kolkata Bangla, Foreign Language, IMDb Top 250, 3D |
-| **DhakaFlix Series** | TV & Web Series, Korean TV & Web Series, Cartoon TV Series |
+| **DhakaFlix Movies** | English Movies, English 1080p, Hindi, South Indian (+Hindi Dubbed), Kolkata Bangla, Foreign Language, IMDb Top 250, 3D, আর ভাষা-ভিত্তিক (Japanese, Korean, Chinese, Bangla Dubbing, Pakistani) |
+| **DhakaFlix Series** | TV & Web Series, Korean TV & Web Series, Cartoon TV Series, Awards & TV Shows, WWE & AEW Wrestling, Documentary |
 | **DhakaFlix Anime** | Anime TV Series, Animation Movies, Animation Movies 1080p |
+
+ডিটেইল পেজে টাইটেলের আসল পোস্টার, গল্প, রেটিং, কাস্ট আর ট্র্যাকিং আইডি TMDB থেকে
+আসে (টাইটল আর বছর মিলিয়ে দেখা হয়, না মিললে সার্ভারের নিজস্ব পোস্টারই থাকে)।
 
 ## কীভাবে কাজ করে
 
@@ -36,6 +39,8 @@ https://raw.githubusercontent.com/Mamun015-Zangetsu/main/index.json
 - API বন্ধ থাকলে সার্ভারের HTML ডিরেক্টরি টেবিল পার্স করে ফলব্যাক কাজ করে।
 - ভিডিও ফাইল সার্ভার থেকে সোজা আসে এবং Range request সাপোর্ট করে, তাই সিক,
   রিজিউম, ডাউনলোড — সবই কাজ করে, কোনো প্রক্সি লাগে না।
+- সার্চ পুরো সার্ভারে হয় (প্রতিটা সার্ভার শেয়ারে একটি রিকোয়েস্ট), তাই নতুন ফোল্ডার
+  যোগ হলেও সেটা খুঁজে পাওয়া যায় — `CATEGORIES` অ্যারে না জানালেও।
 - একটি ফাইল, তিনটি sourceId: `dhakaflix_movies`, `dhakaflix_series`,
   `dhakaflix_anime`। কোন সোর্সে কী যাবে তা `CATEGORIES` অ্যারে ঠিক করে।
 - একই টাইটে ভিন্ন কোডেকের একাধিক ফাইল থাকলে যেটা ফোনে চলবে সেটা আগে দেখানো হয়
@@ -71,6 +76,13 @@ https://raw.githubusercontent.com/Mamun015-Zangetsu/main/index.json
 - প্লেব্যাক ও ডাউনলোড স্পিড তোমার BDIX লাইন আর সার্ভারের উপর নির্ভর করে।
 - নতুন কোডেক (যেমন HEVC 10-bit) সব ফোনে চলে না — সেক্ষেত্রে Zangetsu-র
   Settings → Player → Video decoder → "Software (most compatible)" কাজে দেয়।
+
+## কৃতজ্ঞতা
+
+সার্ভারের তালিকা, ফোল্ডার-পাথ আর ক্যাটাগরি সাজানো
+[redowan99/Redowan-CloudStream](https://github.com/redowan99/Redowan-CloudStream)
+এর BDIX এক্সটেনশনের সাথে মিলিয়ে দেখা হয়েছে (সেটিও GPL-3.0)। বিস্তারিত
+`NOTICE.md` ফাইলে।
 
 ## লাইসেন্স
 

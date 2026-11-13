@@ -1,8 +1,9 @@
 // DhakaFlix provider for Zangetsu.
 //
-// DhakaFlix is a BDIX file server (nginx + h5ai 0.29). Besides the HTML
-// directory table it serves h5ai's private JSON API, including a recursive
-// server-side regex search — that is what makes instant search possible here.
+// DhakaFlix is a BDIX file server (nginx + h5ai 0.29) reachable from a
+// BDIX-connected line. Besides the HTML directory table the server serves
+// h5ai's JSON API, including a recursive server-side regex search — that is
+// what makes instant search possible here.
 //
 // ONE file, loaded once per sourceId: dhakaflix_movies / dhakaflix_series /
 // dhakaflix_anime. The sourceId decides which category folders this source
@@ -15,27 +16,55 @@ var UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko)
 
 var SOURCE_ID = (typeof __SOURCE_ID !== 'undefined' && __SOURCE_ID) ? String(__SOURCE_ID) : 'dhakaflix_movies';
 
+// Public TMDB v3 key (the same one the CloudStream BDIX extensions use). It
+// only enriches a title with a poster, a plot and a rating; if TMDB is
+// unreachable the local files are used exactly as before. Replace it with your
+// own key if you want to.
+var TMDB_KEY = 'e6333b32409e02a4a6eba6fb7ff866bb';
+
+// --- Servers ----------------------------------------------------------------
+// The content hosts. A "share" is one published folder on that host.
+var SERVERS = [
+  { host: 'http://172.16.50.7',  share: 'DHAKA-FLIX-7',  media: true },
+  { host: 'http://172.16.50.8',  share: 'DHAKA-FLIX-8',  media: false }, // games, software
+  { host: 'http://172.16.50.10', share: 'DHAKA-FLIX-10', media: true },
+  { host: 'http://172.16.50.12', share: 'DHAKA-FLIX-12', media: true },
+  { host: 'http://172.16.50.14', share: 'DHAKA-FLIX-14', media: true }
+];
+
 // --- Categories -------------------------------------------------------------
-// Top-level folders as linked from http://172.16.50.4/, each with the content
-// host that actually serves it.
+// Top-level folders on the servers, as published by the BDIX operator.
+// `kind` decides which source (movies / series / anime) exposes it.
 var CATEGORIES = [
-  { id: 'en',        kind: 'movies', server: 'http://172.16.50.7',  path: '/DHAKA-FLIX-7/English%20Movies/',                  name: 'English Movies' },
-  { id: 'en1080',    kind: 'movies', server: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/English%20Movies%20%281080p%29/',    name: 'English Movies 1080p' },
-  { id: 'hindi',     kind: 'movies', server: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/Hindi%20Movies/',                   name: 'Hindi Movies' },
-  { id: 'south',     kind: 'movies', server: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/South%20Movies/', name: 'South Indian Movies' },
-  { id: 'southhd',   kind: 'movies', server: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/Hindi%20Dubbed/', name: 'South Movies Hindi Dubbed' },
-  { id: 'bangla',    kind: 'movies', server: 'http://172.16.50.7',  path: '/DHAKA-FLIX-7/Kolkata%20Bangla%20Movies/',         name: 'Kolkata Bangla Movies' },
-  { id: 'foreign',   kind: 'movies', server: 'http://172.16.50.7',  path: '/DHAKA-FLIX-7/Foreign%20Language%20Movies/',       name: 'Foreign Language Movies' },
-  { id: 'imdb',      kind: 'movies', server: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/IMDb%20Top-250%20Movies/',          name: 'IMDb Top 250' },
-  { id: 'threeD',    kind: 'movies', server: 'http://172.16.50.7',  path: '/DHAKA-FLIX-7/3D%20Movies/',                       name: '3D Movies' },
+  // Movies
+  { id: 'en',        kind: 'movies', host: 'http://172.16.50.7',  path: '/DHAKA-FLIX-7/English%20Movies/',                 name: 'English Movies' },
+  { id: 'en1080',    kind: 'movies', host: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/English%20Movies%20%281080p%29/',   name: 'English Movies 1080p' },
+  { id: 'hindi',     kind: 'movies', host: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/Hindi%20Movies/',                    name: 'Hindi Movies' },
+  { id: 'south',     kind: 'movies', host: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/South%20Movies/', name: 'South Indian Movies' },
+  { id: 'southhd',   kind: 'movies', host: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/Hindi%20Dubbed/', name: 'South Movies Hindi Dubbed' },
+  { id: 'bangla',    kind: 'movies', host: 'http://172.16.50.7',  path: '/DHAKA-FLIX-7/Kolkata%20Bangla%20Movies/',          name: 'Kolkata Bangla Movies' },
+  { id: 'foreign',   kind: 'movies', host: 'http://172.16.50.7',  path: '/DHAKA-FLIX-7/Foreign%20Language%20Movies/',        name: 'Foreign Language Movies' },
+  { id: 'imdb',      kind: 'movies', host: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/IMDb%20Top-250%20Movies/',           name: 'IMDb Top 250' },
+  { id: 'threeD',    kind: 'movies', host: 'http://172.16.50.7',  path: '/DHAKA-FLIX-7/3D%20Movies/',                         name: '3D Movies' },
+  // Foreign language, split by language folder
+  { id: 'fl_jp',     kind: 'movies', host: 'http://172.16.50.7',  path: '/DHAKA-FLIX-7/Foreign%20Language%20Movies/Japanese%20Language/', name: 'Japanese Movies' },
+  { id: 'fl_kr',     kind: 'movies', host: 'http://172.16.50.7',  path: '/DHAKA-FLIX-7/Foreign%20Language%20Movies/Korean%20Language/',   name: 'Korean Movies' },
+  { id: 'fl_cn',     kind: 'movies', host: 'http://172.16.50.7',  path: '/DHAKA-FLIX-7/Foreign%20Language%20Movies/Chinese%20Language/',   name: 'Chinese Movies' },
+  { id: 'fl_bd',     kind: 'movies', host: 'http://172.16.50.7',  path: '/DHAKA-FLIX-7/Foreign%20Language%20Movies/Bangla%20Dubbing%20Movies/', name: 'Bangla Dubbing Movies' },
+  { id: 'fl_pk',     kind: 'movies', host: 'http://172.16.50.7',  path: '/DHAKA-FLIX-7/Foreign%20Language%20Movies/Pakistani%20Movie/',      name: 'Pakistani Movies' },
 
-  { id: 'tv',        kind: 'series', server: 'http://172.16.50.12', path: '/DHAKA-FLIX-12/TV-WEB-Series/',                    name: 'TV & Web Series' },
-  { id: 'korean',    kind: 'series', server: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/KOREAN%20TV%20%26%20WEB%20Series/',  name: 'Korean TV & Web Series' },
-  { id: 'cartoon',   kind: 'series', server: 'http://172.16.50.10', path: '/DHAKA-FLIX-10/Anime%20%26%20Cartoon%20TV%20Series/', name: 'Cartoon TV Series' },
+  // Series
+  { id: 'tv',        kind: 'series', host: 'http://172.16.50.12', path: '/DHAKA-FLIX-12/TV-WEB-Series/',                     name: 'TV & Web Series' },
+  { id: 'korean',    kind: 'series', host: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/KOREAN%20TV%20%26%20WEB%20Series/',   name: 'Korean TV & Web Series' },
+  { id: 'cartoon',   kind: 'series', host: 'http://172.16.50.10', path: '/DHAKA-FLIX-10/Anime%20%26%20Cartoon%20TV%20Series/', name: 'Cartoon TV Series' },
+  { id: 'awards',    kind: 'series', host: 'http://172.16.50.10', path: '/DHAKA-FLIX-10/Awards%20%26%20TV%20Shows/',           name: 'Awards & TV Shows' },
+  { id: 'wwe',       kind: 'series', host: 'http://172.16.50.10', path: '/DHAKA-FLIX-10/WWE%20%26%20AEW%20Wrestling/',          name: 'WWE & AEW Wrestling' },
+  { id: 'documentary', kind: 'series', host: 'http://172.16.50.10', path: '/DHAKA-FLIX-10/Documentary/',                        name: 'Documentary' },
 
-  { id: 'anime',     kind: 'anime',  server: 'http://172.16.50.10', path: '/DHAKA-FLIX-10/Anime%20%26%20Cartoon%20TV%20Series/', name: 'Anime TV Series' },
-  { id: 'animemov',  kind: 'anime',  server: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/Animation%20Movies/',               name: 'Animation Movies' },
-  { id: 'anime1080', kind: 'anime',  server: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/Animation%20Movies%20%281080p%29/',  name: 'Animation Movies 1080p' }
+  // Anime
+  { id: 'anime',     kind: 'anime',  host: 'http://172.16.50.10', path: '/DHAKA-FLIX-10/Anime%20%26%20Cartoon%20TV%20Series/', name: 'Anime TV Series' },
+  { id: 'animemov',  kind: 'anime',  host: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/Animation%20Movies/',                name: 'Animation Movies' },
+  { id: 'anime1080', kind: 'anime',  host: 'http://172.16.50.14', path: '/DHAKA-FLIX-14/Animation%20Movies%20%281080p%29/',  name: 'Animation Movies 1080p' }
 ];
 
 var VIDEO_EXT = /\.(mkv|mp4|m4v|avi|webm|mov|ts|m2ts|flv|wmv)$/i;
@@ -56,7 +85,7 @@ function _myCategories() {
   return out;
 }
 
-function _catUrl(c) { return c.server + c.path; }
+function _catUrl(c) { return c.host + c.path; }
 
 // --- HTTP -------------------------------------------------------------------
 function _origin(url) {
@@ -180,13 +209,6 @@ function _videos(entries) {
   return out;
 }
 
-function _poster(entries) {
-  for (var i = 0; i < entries.length; i++) {
-    if (entries[i].file && IMAGE_EXT.test(entries[i].name)) return entries[i].url;
-  }
-  return null;
-}
-
 // --- Naming -----------------------------------------------------------------
 // Release tags stripped so the app shows "Dune (1984)" instead of
 // "Dune 1984 EXTENDED 1080p BluRay x265 HEVC 10bit ESub-Joy".
@@ -212,6 +234,15 @@ function _pretty(name) {
   return _trim(n);
 }
 
+// A title as a catalogue would show it: "Title (Year)" and nothing else.
+function _titleOnly(name) {
+  var n = _pretty(name);
+  n = n.replace(/^\d{1,3}\.\s*/, '');                     // "001. The Godfather"
+  n = n.replace(/\s*\((?:TV\s*(?:Series|Cartoon|Mini Series|Documentary)\s*)?\d{4}[^)]*\)\s*$/i, '');
+  n = n.replace(/\s*\([^)]*\d{4}[^)]*\).*$/, '');
+  return _trim(n.replace(/\s{2,}/g, ' '));
+}
+
 function _epTitle(name) {
   var m = String(name).match(/[Ss](\d{1,2})[\s._-]?[Ee][Pp]?(\d{1,3})/);
   var p = _pretty(name);
@@ -230,17 +261,22 @@ function _yearOf(s) {
   return m ? parseInt(m[0], 10) : null;
 }
 
+function _isSeriesName(s) {
+  return /\bTV\s*(Series|Cartoon|Mini Series|Serial|Show)\b/i.test(String(s || '')) ||
+         /\(TV\b/i.test(String(s || ''));
+}
+
 function _episodeNumber(name) {
-  var m = String(name || '').match(/[Ss](\d{1,2})[\s._-]?[Ee][Pp]?(\d{1,3})/);
+  var m = String(name).match(/[Ss](\d{1,2})[\s._-]?[Ee][Pp]?(\d{1,3})/);
   if (m) return parseInt(m[2], 10);
-  m = String(name || '').match(/\b(\d{1,2})x(\d{2,3})\b/);
+  m = String(name).match(/\b(\d{1,2})x(\d{2,3})\b/);
   if (m) return parseInt(m[2], 10);
-  m = String(name || '').match(/(?:^|[\s._\-\[])Ep?(?:isode)?[\s._-]*(\d{1,4})\b/i);
+  m = String(name).match(/(?:^|[\s._\-\[])Ep?(?:isode)?[\s._-]*(\d{1,4})\b/i);
   return m ? parseInt(m[1], 10) : null;
 }
 
 function _seasonNumber(name) {
-  var m = String(name || '').match(/[Ss](\d{1,2})[\s._-]?[Ee][Pp]?\d{1,3}/) ||
+  var m = String(name).match(/[Ss](\d{1,2})[\s._-]?[Ee][Pp]?\d{1,3}/) ||
           String(name || '').match(/Season[\s._-]*(\d{1,2})/i);
   return m ? parseInt(m[1], 10) : null;
 }
@@ -266,6 +302,16 @@ function _item(name, url, cat) {
   };
 }
 
+// Internal fields never reach the app.
+function _stripInternal(items) {
+  for (var i = 0; i < items.length; i++) {
+    delete items[i]._path;
+    delete items[i]._year;
+    delete items[i]._cat;
+  }
+  return items;
+}
+
 // --- Concurrency ------------------------------------------------------------
 function _mapLimit(list, limit, fn) {
   var i = 0, out = [];
@@ -281,10 +327,10 @@ function _mapLimit(list, limit, fn) {
   return Promise.all(workers).then(function () { return out; });
 }
 
-
-// The server keeps a poster inside each title folder ("a_AL_.jpg" / "a_VL_.jpg").
-// One recursive search per folder finds them all at once, so the home rows and
-// detail pages can show real artwork without one request per title.
+// --- Posters ----------------------------------------------------------------
+// The server keeps a poster inside each title folder ("a_AL_.jpg" / "a_VL_.jpg",
+// sometimes "a11.jpg"). One recursive search per folder finds them all at once,
+// so cards can show real artwork without one request per title.
 var _coverCache = {};
 
 function _coversFor(dirUrl) {
@@ -293,32 +339,22 @@ function _coversFor(dirUrl) {
   var href = _path(dirUrl).replace(/\/+$/, '') + '/';
   var promise = _h5ai(dirUrl, { action: 'get', search: { href: href, pattern: '\\.(jpe?g|png)$', ignorecase: true } })
     .then(function (j) {
-      var hits = j.search || [], map = {}, prefer = {};
+      var hits = j.search || [], map = {};
       for (var i = 0; i < hits.length; i++) {
         var h = hits[i] && hits[i].href;
         if (!h || /\/$/.test(h)) continue;
         var parent = h.replace(/\/[^\/]*$/, '');
         var name = _segName(h).toLowerCase();
-        if (/^a_(al|vl)_/.test(name)) { prefer[parent] = true; map[parent] = _origin(dirUrl) + h; }
+        // "a_AL_"/"a_VL_" are the real posters; anything else is a fallback.
+        if (/^a_(al|vl)_/.test(name)) map[parent] = _origin(dirUrl) + h;
         else if (!map[parent]) map[parent] = _origin(dirUrl) + h;
       }
-      for (var p in prefer) { /* keep the a_AL_ / a_VL_ poster */ }
       _coverCache[key] = map;
       return map;
     })
     .catch(function () { return {}; });
   _coverCache[key] = promise;
   return promise;
-}
-
-// Internal fields never reach the app.
-function _stripInternal(items) {
-  for (var i = 0; i < items.length; i++) {
-    delete items[i]._path;
-    delete items[i]._year;
-    delete items[i]._cat;
-  }
-  return items;
 }
 
 function _applyCovers(items, covers) {
@@ -329,24 +365,105 @@ function _applyCovers(items, covers) {
   return items;
 }
 
+// --- TMDB enrichment --------------------------------------------------------
+// A real poster, a plot and a rating make a file list look like a catalogue.
+// Purely optional: every call is wrapped, and a failure leaves the local data
+// exactly as it was.
+function _tmdbSearch(title, isTv) {
+  var q = encodeURIComponent(title);
+  var kind = isTv ? 'tv' : 'movie';
+  return fetch('https://api.themoviedb.org/3/search/' + kind + '?api_key=' + TMDB_KEY + '&query=' + q,
+               { headers: { 'Accept': 'application/json' } })
+    .then(function (r) { return r && r.ok ? JSON.parse(r.body) : null; })
+    .then(function (j) {
+      if (!j || !j.results || !j.results.length) return null;
+      return j.results[0];
+    })
+    .catch(function () { return null; });
+}
+
+function _tmdbDetails(id, isTv) {
+  var kind = isTv ? 'tv' : 'movie';
+  return fetch('https://api.themoviedb.org/3/' + kind + '/' + id + '?api_key=' + TMDB_KEY + '&append_to_response=credits',
+               { headers: { 'Accept': 'application/json' } })
+    .then(function (r) { return r && r.ok ? JSON.parse(r.body) : null; })
+    .catch(function () { return null; });
+}
+
+// TMDB happily returns a different film with a similar name ("40 Acres" is a
+// 2025 movie, while the BDIX folder is the 2024 one). A match is only used
+// when the title and the year agree.
+function _normTitle(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9\u0980-\u09ff]+/g, ' ').trim();
+}
+
+function _tmdbMatches(localTitle, localYear, meta) {
+  if (!meta) return false;
+  if (localYear && meta.year) {
+    // The year has to match exactly: "40 Acres" exists both as a 2024 BDIX
+    // release and as a 2025 film, and the wrong one must not win.
+    if (localYear !== parseInt(meta.year, 10)) return false;
+  }
+  var a = _normTitle(localTitle), b = _normTitle(meta.title);
+  if (a && b && a !== b) {
+    if (b.indexOf(a) !== 0 && a.indexOf(b) !== 0) return false;
+  }
+  return true;
+}
+
+function _tmdbFor(title, rawName) {
+  var clean = _titleOnly(rawName || title);
+  if (!clean || clean.length < 2) return Promise.resolve(null);
+  var isTv = _isSeriesName(rawName || title);
+  var localYear = _yearOf(rawName || title);
+  return _tmdbSearch(clean, isTv).then(function (hit) {
+    if (!hit || !hit.id) return null;
+    return _tmdbDetails(hit.id, isTv).then(function (full) {
+      var d = full || hit;
+      var cast = [];
+      if (d.credits && d.credits.cast) {
+        for (var i = 0; i < d.credits.cast.length && i < 12; i++) {
+          if (d.credits.cast[i] && d.credits.cast[i].name) cast.push(d.credits.cast[i].name);
+        }
+      }
+      var year = null;
+      var date = d.release_date || d.first_air_date || '';
+      if (date) year = String(date).split('-')[0];
+      return {
+        title: d.title || d.name || clean,
+        overview: d.overview || null,
+        poster: d.poster_path ? 'https://image.tmdb.org/t/p/w500' + d.poster_path : null,
+        backdrop: d.backdrop_path ? 'https://image.tmdb.org/t/p/w1280' + d.backdrop_path : null,
+        year: year,
+        rating: d.vote_average || null,
+        cast: cast,
+        id: d.id,
+        isTv: isTv
+      };
+    });
+  }).then(function (meta) {
+    return _tmdbMatches(clean, localYear, meta) ? meta : null;
+  }).catch(function () { return null; });
+}
+
 // --- Provider API -----------------------------------------------------------
 function getInfo() {
   var names = { movies: 'DhakaFlix Movies', series: 'DhakaFlix Series', anime: 'DhakaFlix Anime' };
   return {
     name: names[KIND], lang: 'en', baseUrl: 'http://172.16.50.4/',
-    logo: 'https://mamun015.github.io/zangetsu-dhakaflix/logo.png',
-    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.1.3'
+    logo: 'https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png',
+    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.2.0'
   };
 }
 
-// One row per category; row items are that category's year / letter groups, so
+// One row per category; row items are that category's year or letter groups, so
 // the home screen costs one request per category and nothing is pre-indexed.
 function getHome(opts) {
   var cats = _myCategories(), rows = [];
   return _mapLimit(cats, 3, function (c) {
     var load = KIND === 'series' ? _seriesTitles(c) : _homeItems(c);
     return load.then(function (items) {
-      if (items.length) rows.push({ title: c.name, items: _stripInternal(items) });
+      if (items.length) rows.push({ title: c.name, items: items });
     });
   }).then(function () { return rows; });
 }
@@ -392,14 +509,6 @@ function _homeItems(c) {
   });
 }
 
-// The year a bucket folder stands for, so the home row can start at the
-// newest one. "(2024)", "(1995) & Before", "(2023) 1080p" all yield a year.
-function _bucketYear(name) {
-  var n = _cleanName(name);
-  var m = n.match(/\((\d{4})/) || n.match(/^(\d{4})\s*&/i) || n.match(/^(\d{4})/);
-  return m ? parseInt(m[1], 10) : null;
-}
-
 // Series home row: real shows, not letter buckets. One request for the
 // category, one per bucket (4-5 buckets), so the row is honest and cheap.
 function _seriesTitles(c) {
@@ -411,7 +520,8 @@ function _seriesTitles(c) {
       if (_looksLikeBucket(e.name)) groups.push(e); else titles.push(e);
     }
     if (!groups.length) {
-      return titles.map(function (e) { return _item(e.name, e.url, c); });
+      var direct = titles.slice(0, 200).map(function (e) { return _item(e.name, e.url, c); });
+      return _coversFor(_catUrl(c)).then(function (cov) { return _applyCovers(direct, cov); });
     }
     var out = [];
     return _mapLimit(groups, 4, function (g) {
@@ -426,7 +536,7 @@ function _seriesTitles(c) {
         });
       });
     }).then(function () {
-      var all = out.concat(titles.map(function (e) { return _item(e.name, e.url, c); }));
+      var all = out.concat(titles.slice(0, 200).map(function (e) { return _item(e.name, e.url, c); }));
       return all.slice(0, 200);
     });
   });
@@ -444,6 +554,14 @@ function _looksLikeBucket(name) {
   return false;
 }
 
+// The year a bucket folder stands for, so the home row can start at the
+// newest one. "(2024)", "(1995) & Before", "(2023) 1080p" all yield a year.
+function _bucketYear(name) {
+  var n = _cleanName(name);
+  var m = n.match(/\((\d{4})/) || n.match(/^(\d{4})\s*&/i) || n.match(/^(\d{4})/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
 function popular(opts) {
   var cats = _myCategories();
   return _mapLimit(cats, 3, function (c) {
@@ -458,28 +576,29 @@ function popular(opts) {
   }).then(function (lists) {
     var out = [];
     for (var i = 0; i < lists.length; i++) out = out.concat(lists[i]);
-    return out.slice(0, 60);
+    return _stripInternal(out.slice(0, 60));
   });
 }
 
-// Server-side recursive regex search, one call per category. h5ai returns both
-// folders and files; a folder that matches is a title, a file is a loose video
-// in one of them.
+// Server-side recursive regex search, one call per server share — the whole
+// server is covered, including folders this provider does not know about yet.
 function _regexEscape(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function _searchCategory(c, pattern) {
-  var href = _path(_catUrl(c)).replace(/\/+$/, '') + '/';
-  return _h5ai(_catUrl(c), { action: 'get', search: { href: href, pattern: pattern, ignorecase: true } })
+function _searchServer(srv, pattern) {
+  var href = '/' + srv.share + '/';
+  return _h5ai(srv.host + href, { action: 'get', search: { href: href, pattern: pattern, ignorecase: true } })
     .then(function (j) {
       var hits = j.search || [], out = [];
       for (var i = 0; i < hits.length; i++) {
         var h = hits[i];
         if (!h || !h.href) continue;
-        var isFolder = /\/$/.test(h.href);
-        if (!isFolder) continue;                 // files handled via their folder
-        out.push({ name: _segName(h.href), url: c.server + h.href, cat: c, size: 0, folder: true });
+        // A title is a FOLDER (size null); a file is an episode or a movie
+        // file, and a search result must be openable as a title.
+        if (h.size !== null && h.size !== undefined) continue;
+        if (!/\/$/.test(h.href)) continue;
+        out.push({ name: _segName(h.href), url: srv.host + h.href });
       }
       return out;
     }).catch(function () { return []; });
@@ -493,32 +612,27 @@ function search(query, page, opts) {
   var key = q.toLowerCase();
   if (_searchCache[key]) return Promise.resolve(_searchCache[key]);
   var pattern = _regexEscape(key);
-  var cats = _myCategories();
-  return _mapLimit(cats, 3, function (c) {
-    return Promise.all([_searchCategory(c, pattern), _coversFor(_catUrl(c))]).then(function (pair) {
-      var hits = pair[0] || [];
-      _applyCovers(hits, pair[1] || {});
-      return hits;
-    });
-  }).then(function (lists) {
+  var servers = [];
+  for (var i = 0; i < SERVERS.length; i++) if (SERVERS[i].media) servers.push(SERVERS[i]);
+  return _mapLimit(servers, 3, function (srv) { return _searchServer(srv, pattern); }).then(function (lists) {
     var out = [], seen = {};
     for (var i = 0; i < lists.length; i++) {
-      for (var k = 0; k < lists[i].length; k++) {
-        var r = lists[i][k];
+      var list = lists[i] || [];
+      for (var k = 0; k < list.length; k++) {
+        var r = list[k];
         var norm = r.url.replace(/\/+$/, '').toLowerCase();
         if (seen[norm]) continue;
         seen[norm] = 1;
         var tkey = _pretty(r.name).toLowerCase();
         if (seen['t:' + tkey]) continue;
         seen['t:' + tkey] = 1;
-        out.push(_item(r.name, r.url, r.cat));
+        out.push(_item(r.name, r.url, null));
       }
     }
     // Title matches rank above path matches ("Dune" before "The Sand Dune").
-    var low = key;
     out.sort(function (a, b) {
-      var at = a.title.toLowerCase().indexOf(low) === 0 ? 0 : 1;
-      var bt = b.title.toLowerCase().indexOf(low) === 0 ? 0 : 1;
+      var at = a.title.toLowerCase().indexOf(key) === 0 ? 0 : 1;
+      var bt = b.title.toLowerCase().indexOf(key) === 0 ? 0 : 1;
       if (at !== bt) return at - bt;
       return a.title < b.title ? -1 : a.title > b.title ? 1 : 0;
     });
@@ -539,6 +653,7 @@ function _isSeasonName(name) {
 function getDetail(url, opts) {
   var u = String(url);
   return _list(u).then(function (children) {
+    var rawTitle = _segName(u);
     var title = _pretty(u);
     var poster = _poster(children);
     var vids = _videos(children);
@@ -567,20 +682,20 @@ function getDetail(url, opts) {
           for (var k = 0; k < files.length; k++) _pushFile(eps, files[k], sf);
         }).catch(function () {});
       }).then(function () {
-        return _detail(u, title, poster, _numbered(eps, title));
+        return _detail(u, title, rawTitle, poster, _numbered(eps, title));
       });
     }
 
-    // Group / year / letter folder: every child folder is a title card, plus
-    // any video file sitting loose in the group (a real thing on this server).
-    // A title folder that holds exactly one movie file: label the episode
-    // with the folder title ("Dune (1984)"), not the release filename.
+    // A title folder that holds exactly one movie file: label the episode with
+    // the folder title ("Dune (1984)"), not the release filename.
     if (vids.length === 1 && !folders.length) {
-      return _detail(u, title, poster, [{
+      return _detail(u, title, rawTitle, poster, [{
         id: vids[0].url, title: title, number: 1, url: vids[0].url
       }]);
     }
 
+    // Group / year / letter folder: every child folder is a title card, plus
+    // any video file sitting loose in the group (a real thing on this server).
     var cards = [];
     for (var f = 0; f < folders.length; f++) {
       cards.push({
@@ -589,7 +704,7 @@ function getDetail(url, opts) {
       });
     }
     for (var i = 0; i < vids.length; i++) cards.push(_epFromFile(vids[i], cards.length + 1));
-    return _detail(u, title, poster, _numbered(cards, title));
+    return _detail(u, title, rawTitle, poster, _numbered(cards, title));
   }).catch(function () {
     return null;
   });
@@ -622,7 +737,7 @@ function _numbered(eps, showTitle) {
         var lowE = t.toLowerCase(), at = lowE.indexOf(nm.toLowerCase());
         if (at >= 0) {
           t = (t.slice(0, at) + ' ' + t.slice(at + nm.length)).replace(/\s{2,}/g, ' ');
-          t = t.replace(/^[\s\u00b7.\-–]+/, '');
+          t = t.replace(/^[\s\u00b7.\-]+/, '');
           break;
         }
       }
@@ -638,15 +753,47 @@ function _numbered(eps, showTitle) {
   return out;
 }
 
-function _detail(url, title, poster, episodes) {
-  return {
+function _poster(entries) {
+  for (var i = 0; i < entries.length; i++) {
+    var e = entries[i];
+    if (e.file && IMAGE_EXT.test(e.name)) {
+      var n = e.name.toLowerCase();
+      if (/^a_(al|vl)_/.test(n)) return e.url;
+    }
+  }
+  for (var j = 0; j < entries.length; j++) {
+    if (entries[j].file && IMAGE_EXT.test(entries[j].name)) return entries[j].url;
+  }
+  return null;
+}
+
+function _detail(url, title, rawTitle, poster, episodes) {
+  var year = _yearOf(title);
+  var base = {
     id: url, title: title, url: url, description: null,
-    cover: poster || null, status: 'unknown', genres: [], studios: [],
+    cover: poster || null, banner: null, status: 'unknown', genres: [], studios: [],
     type: KIND === 'anime' ? 'anime' : 'movie', sourceId: SOURCE_ID,
-    // MediaDetail.year is a String? in the app — a number here made the whole
-    // detail fail to parse, which showed up as an empty episode list.
-    episodes: episodes, year: (_yearOf(title) == null ? null : String(_yearOf(title)))
+    // MediaDetail.year is a String? in the app — a number here makes the whole
+    // detail fail to parse, which shows up as an empty episode list.
+    episodes: episodes, year: (year == null ? null : String(year)),
+    cast: [], tmdbId: null, tmdbIsTv: false
   };
+  // TMDB fills in a poster, a plot, a rating and the tracking id. It is a
+  // nice-to-have: a failure leaves the local detail untouched.
+  return _tmdbFor(title, rawTitle).then(function (meta) {
+    if (!meta) return base;
+    if (meta.poster) base.cover = meta.poster;
+    if (meta.backdrop) base.banner = meta.backdrop;
+    if (meta.overview) base.description = meta.overview;
+    if (meta.year) base.year = meta.year;
+    if (meta.cast && meta.cast.length) base.cast = meta.cast;
+    if (meta.id) { base.tmdbId = meta.id; base.tmdbIsTv = !!meta.isTv; }
+    if (meta.title && base.episodes.length === 1 && base.episodes[0].title === base.title) {
+      base.title = meta.title;
+      base.episodes[0].title = meta.title;
+    }
+    return base;
+  }).catch(function () { return base; });
 }
 
 function getEpisodes(url, opts) {
@@ -671,7 +818,7 @@ function getVideoSources(episodeUrl) {
     if (vids.length) return _sourcesFrom(vids);
     var subs = [];
     for (var i = 0; i < children.length; i++) if (children[i].folder) subs.push(children[i]);
-    if (!subs.length) throw new Error('DhakaFlix: \u098f\u0987 \u09ab\u09cb\u09b2\u09cd\u09a1\u09be\u09b0\u09c7 \u0995\u09cb\u09a8\u09cb \u09ad\u09bf\u09a1\u09bf\u0993 \u09ab\u09be\u0987\u09b2 \u09a8\u09c7\u0987');
+    if (!subs.length) throw new Error('DhakaFlix: এই ফোল্ডারে কোনো ভিডিও ফাইল নেই');
     // Never fan out over a whole year/list folder: a card that is really a
     // bucket would fire hundreds of requests and look like "won't play".
     if (subs.length > 8) subs = subs.slice(0, 3);
