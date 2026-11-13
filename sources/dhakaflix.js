@@ -614,7 +614,7 @@ function getInfo() {
   return {
     name: names[KIND], lang: 'en', baseUrl: 'http://172.16.50.4/',
     logo: 'https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png',
-    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.4.1'
+    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.4.2'
   };
 }
 
@@ -799,8 +799,11 @@ function _searchScopeTree(scope, pattern, split) {
 }
 
 function _searchBuckets(buckets, pattern) {
+  // Each bucket answers on its own: a slow one is dropped, the others still
+  // deliver their titles. That keeps one busy folder from emptying the whole
+  // search.
   return _mapLimit(buckets, 6, function (b) {
-    return _searchInScope({ host: b.host, href: b.href }, pattern);
+    return _withTimeout(_searchInScope({ host: b.host, href: b.href }, pattern), 2000, []);
   }).then(function (groups) {
     var out = [];
     for (var i = 0; i < groups.length; i++) {
@@ -874,7 +877,7 @@ function search(query, page, opts) {
   // that answer in time are enough, and Auto Resolve has five seconds for the
   // whole chain.
   return _mapLimit(scopes, 6, function (sc) {
-    return _withTimeout(_searchScopeTree(sc, pattern), 3000, []);
+    return _withTimeout(_searchScopeTree(sc, pattern), 4500, []);
   }).then(function (lists) {
     var out = [], seen = {};
     for (var i = 0; i < lists.length; i++) {
