@@ -518,27 +518,28 @@ function _videosOfFolder(url) {
 // a season lives in the same folder and pays the price only once.
 var _altCache = {};
 
-function _alternativeSources(folderUrl, folderName) {
+// The same film often exists in more than one folder: a 1080p HEVC release
+// and a 720p H.264 one, for instance. When the folder we are playing has
+// nothing a phone can decode (or nothing better than 720p), look for the
+// other release and offer it too, so the viewer gets a stream that plays
+// instead of a black screen.
+//
+// The lookup costs a couple of seconds (a search per server plus a folder
+// listing), so it is cached per folder: every episode of a season lives in
+// the same folder and pays the price only once.
+function _alternativeFiles(folderUrl, folderName) {
   var key = String(folderUrl).replace(/\/$/, '');
   if (_altCache[key]) return Promise.resolve(_altCache[key]);
   var promise = _alternativeFolders(key, folderName).then(function (folders) {
-    return _mapLimit(folders, 3, function (f) {
-      return _videosOfFolder(f.url).then(function (fv) {
-        if (!fv.length) return [];
-        var playable = [], rest = [];
-        for (var i = 0; i < fv.length; i++) {
-          if (_isPlayable(fv[i].name)) playable.push(fv[i]); else rest.push(fv[i]);
-        }
-        playable.sort(function (a, b) { return _scoreFile(b.name) - _scoreFile(a.name); });
-        rest.sort(function (a, b) { return _scoreFile(b.name) - _scoreFile(a.name); });
-        var pick = playable[0] || rest[0];
-        if (!pick) return [];
-        return [_source(pick.url, _isPlayable(pick.name) ? _quality(pick.name) : null, _labelFor(pick.name))];
-      }).catch(function () { return []; });
-    }).then(function (extra) {
-      var out = [];
-      for (var i = 0; i < extra.length; i++) if (extra[i]) out = out.concat(extra[i]);
-      return out;
+    return _mapLimit(folders, 4, function (f) {
+      return _videosOfFolder(f.url).then(function (fv) { return fv; }).catch(function () { return []; });
+    }).then(function (groups) {
+      var files = [];
+      for (var i = 0; i < groups.length; i++) {
+        var g = groups[i] || [];
+        for (var k = 0; k < g.length; k++) files.push(g[k]);
+      }
+      return files;
     });
   }).catch(function () { return []; });
   _altCache[key] = promise;
@@ -551,7 +552,7 @@ function getInfo() {
   return {
     name: names[KIND], lang: 'en', baseUrl: 'http://172.16.50.4/',
     logo: 'https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png',
-    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.3.0'
+    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.3.1'
   };
 }
 
@@ -910,29 +911,29 @@ function getVideoSources(episodeUrl) {
   var looksLikeFile = VIDEO_EXT.test(_safeDecode(u).split('?')[0]);
   if (looksLikeFile) {
     var name = _segName(u);
-    var q = _isPlayable(name) ? _quality(name) : null;
-    var own = [_source(u, q, _labelFor(name))];
-    if (_isPlayable(name)) return Promise.resolve(own);
-    // This file is one the phone cannot decode. Look for the same title in
-    // its other release (usually a 720p H.264 one) and offer it as well.
     var parent = u.replace(/\/[^\/]*$/, '');
+    var own = [{ name: name, url: u, size: 0 }];
+    // A 10-bit HEVC file cannot be decoded by most phones, and a 720p file is
+    // a waste when a 1080p H.264 release of the same title exists elsewhere
+    // on the server. Look for it either way.
+    var wantBetter = !(_isPlayable(name) && _quality(name) === '1080p');
+    if (!wantBetter) return Promise.resolve(_sourcesFromFiles(own));
     // The FOLDER name is the title ("Dune (2021) 1080p HMAX"); the file name
     // carries the release tags and would not match the other release.
-    return _alternativeSources(parent, _segName(parent)).then(function (extra) {
-      return extra.length ? extra.concat(own) : own;
+    return _alternativeFiles(parent, _segName(parent)).then(function (alt) {
+      return _sourcesFromFiles(alt.concat(own));
     });
   }
   return _list(u).then(function (children) {
     var vids = _videos(children);
     if (vids.length) {
-      var playable = false;
-      for (var p = 0; p < vids.length; p++) if (_isPlayable(vids[p].name)) { playable = true; break; }
-      var own = _sourcesFrom(vids);
-      if (playable) return own;
-      // Nothing here plays on a budget phone — look for the same title in its
-      // other release (usually a 720p H.264 one) and offer that as well.
-      return _alternativeSources(u, _segName(u)).then(function (extra) {
-        return extra.length ? extra.concat(own) : own;
+      var best1080 = false;
+      for (var p = 0; p < vids.length; p++) {
+        if (_isPlayable(vids[p].name) && _quality(vids[p].name) === '1080p') { best1080 = true; break; }
+      }
+      if (best1080) return _sourcesFromFiles(vids);
+      return _alternativeFiles(u, _segName(u)).then(function (alt) {
+        return _sourcesFromFiles(alt.concat(vids));
       });
     }
     var subs = [];
@@ -954,9 +955,31 @@ function getVideoSources(episodeUrl) {
       }).catch(function () {});
     }).then(function () {
       if (!found.length) throw new Error('DhakaFlix: এই ফোল্ডারে কোনো ভিডিও ফাইল নেই');
-      return _sourcesFrom(found);
+      return _sourcesFromFiles(found);
     });
   });
+}
+
+// One list of files in, one list of sources out: playable files first, then
+// the ones a budget phone cannot decode. A 10-bit HEVC file carries no
+// quality hint, so the app (which sorts by quality) does not start on it —
+// the label still names the resolution, so it stays one tap away in the
+// Sources sheet for anyone whose device can play it.
+function _sourcesFromFiles(files) {
+  var playable = [], rest = [];
+  for (var i = 0; i < files.length; i++) {
+    if (_isPlayable(files[i].name)) playable.push(files[i]); else rest.push(files[i]);
+  }
+  playable.sort(function (a, b) { return _scoreFile(b.name) - _scoreFile(a.name); });
+  rest.sort(function (a, b) { return _scoreFile(b.name) - _scoreFile(a.name); });
+  var out = [];
+  for (var p = 0; p < playable.length && out.length < 4; p++) {
+    out.push(_source(playable[p].url, _quality(playable[p].name), _labelFor(playable[p].name)));
+  }
+  for (var r = 0; r < rest.length && out.length < 5; r++) {
+    out.push(_source(rest[r].url, null, _labelFor(rest[r].name)));
+  }
+  return out;
 }
 
 // BDIX folders hold one release per quality, usually HEVC/x265 10-bit in an
@@ -977,9 +1000,12 @@ function _scoreFile(name) {
   if (/8[ _-]?bit/.test(n)) s += 10;
   if (/\.(avi|wmv|flv|ts|m2ts)$/.test(n)) s -= 30;
   var q = _quality(name);
-  if (q === '1080p') s += 6;
+  if (q === '1080p') s += 8;
   else if (q === '720p') s += 5;
-  else if (q === '2160p' || q === '4k') s -= 15;
+  else if (q === '1440p') s -= 30;
+  // 1080p is the ceiling: a 4K file is heavy to decode and heavy on the
+  // battery, and it is the first thing to break on a budget phone.
+  else if (q === '2160p' || q === '4k') s -= 70;
   return s;
 }
 
@@ -995,25 +1021,6 @@ function _labelFor(name) {
   if (/10[ _-]?bit/.test(n)) bits.push('10-bit');
   else if (/8[ _-]?bit/.test(n)) bits.push('8-bit');
   return bits.join(' \u00b7 ');
-}
-
-function _sourcesFrom(vids) {
-  var list = vids.slice(0);
-  list.sort(function (a, b) {
-    var d = _scoreFile(b.name) - _scoreFile(a.name);
-    if (d !== 0) return d;
-    return b.size - a.size;
-  });
-  var out = [];
-  for (var i = 0; i < list.length && out.length < 5; i++) {
-    // A 10-bit HEVC file carries no quality hint: the app sorts by quality
-    // and would always start on it, but most phones cannot decode it. The
-    // label still names the resolution, so it stays one tap away in the
-    // Sources sheet for anyone whose device can play it.
-    var q = _isPlayable(list[i].name) ? _quality(list[i].name) : null;
-    out.push(_source(list[i].url, q, _labelFor(list[i].name)));
-  }
-  return out;
 }
 
 function _source(url, quality, label) {
