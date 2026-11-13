@@ -25,12 +25,42 @@ var TMDB_KEY = 'e6333b32409e02a4a6eba6fb7ff866bb';
 // --- Servers ----------------------------------------------------------------
 // The content hosts. A "share" is one published folder on that host.
 var SERVERS = [
-  { host: 'http://172.16.50.7',  share: 'DHAKA-FLIX-7',  media: true },
-  { host: 'http://172.16.50.8',  share: 'DHAKA-FLIX-8',  media: false }, // games, software
-  { host: 'http://172.16.50.10', share: 'DHAKA-FLIX-10', media: true },
-  { host: 'http://172.16.50.12', share: 'DHAKA-FLIX-12', media: true },
-  { host: 'http://172.16.50.14', share: 'DHAKA-FLIX-14', media: true }
+  { id: '7',  host: 'http://172.16.50.7',  share: 'DHAKA-FLIX-7',  media: true },
+  { id: '8',  host: 'http://172.16.50.8',  share: 'DHAKA-FLIX-8',  media: false }, // games, software
+  { id: '10', host: 'http://172.16.50.10', share: 'DHAKA-FLIX-10', media: true },
+  { id: '12', host: 'http://172.16.50.12', share: 'DHAKA-FLIX-12', media: true },
+  { id: '14', host: 'http://172.16.50.14', share: 'DHAKA-FLIX-14', media: true }
 ];
+
+// Where a search runs. Scoping it to the published folders instead of the
+// whole share cuts the answer from seconds to a fraction of a second: the
+// big shares hold tens of thousands of files, and a share-wide pattern also
+// matches every episode file of every show.
+var SEARCH_SCOPES = {
+  movies: [
+    { host: 'http://172.16.50.7',  href: '/DHAKA-FLIX-7/English%20Movies/' },
+    { host: 'http://172.16.50.7',  href: '/DHAKA-FLIX-7/Foreign%20Language%20Movies/' },
+    { host: 'http://172.16.50.7',  href: '/DHAKA-FLIX-7/Kolkata%20Bangla%20Movies/' },
+    { host: 'http://172.16.50.7',  href: '/DHAKA-FLIX-7/3D%20Movies/' },
+    { host: 'http://172.16.50.14', href: '/DHAKA-FLIX-14/English%20Movies%20%281080p%29/' },
+    { host: 'http://172.16.50.14', href: '/DHAKA-FLIX-14/Hindi%20Movies/' },
+    { host: 'http://172.16.50.14', href: '/DHAKA-FLIX-14/SOUTH%20INDIAN%20MOVIES/' },
+    { host: 'http://172.16.50.14', href: '/DHAKA-FLIX-14/IMDb%20Top-250%20Movies/' }
+  ],
+  series: [
+    { host: 'http://172.16.50.12', href: '/DHAKA-FLIX-12/TV-WEB-Series/' },
+    { host: 'http://172.16.50.14', href: '/DHAKA-FLIX-14/KOREAN%20TV%20%26%20WEB%20Series/' },
+    { host: 'http://172.16.50.10', href: '/DHAKA-FLIX-10/Anime%20%26%20Cartoon%20TV%20Series/' },
+    { host: 'http://172.16.50.10', href: '/DHAKA-FLIX-10/Awards%20%26%20TV%20Shows/' },
+    { host: 'http://172.16.50.10', href: '/DHAKA-FLIX-10/WWE%20%26%20AEW%20Wrestling/' },
+    { host: 'http://172.16.50.10', href: '/DHAKA-FLIX-10/Documentary/' }
+  ],
+  anime: [
+    { host: 'http://172.16.50.10', href: '/DHAKA-FLIX-10/Anime%20%26%20Cartoon%20TV%20Series/' },
+    { host: 'http://172.16.50.14', href: '/DHAKA-FLIX-14/Animation%20Movies/' },
+    { host: 'http://172.16.50.14', href: '/DHAKA-FLIX-14/Animation%20Movies%20%281080p%29/' }
+  ]
+};
 
 // --- Categories -------------------------------------------------------------
 // Top-level folders on the servers, as published by the BDIX operator.
@@ -487,9 +517,8 @@ function _alternativeFolders(folderUrl, folderName) {
   if (!key || key.length < 3) return Promise.resolve([]);
   var year = _yearOfName(folderName);
   var pattern = _regexEscape(key);
-  var servers = [];
-  for (var i = 0; i < SERVERS.length; i++) if (SERVERS[i].media) servers.push(SERVERS[i]);
-  return _mapLimit(servers, 4, function (srv) { return _searchServer(srv, pattern); }).then(function (lists) {
+  var scopes = _scopesForKind();
+  return _mapLimit(scopes, 6, function (sc) { return _searchScopeTree(sc, pattern, false); }).then(function (lists) {
     var hits = [], seen = {};
     for (var i = 0; i < lists.length; i++) {
       var list = lists[i] || [];
@@ -546,13 +575,39 @@ function _alternativeFiles(folderUrl, folderName) {
   return promise;
 }
 
+
+// A promise that gives up after a while and answers with a fallback. The
+// Auto Resolve probe has five seconds for match + episodes + sources, so the
+// hunt for another release gets a slice of that instead of all of it.
+function _withTimeout(promise, ms, fallback) {
+  return new Promise(function (resolve) {
+    var done = false;
+    var timer = setTimeout(function () {
+      if (done) return;
+      done = true;
+      resolve(fallback);
+    }, ms);
+    promise.then(function (v) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(v);
+    }).catch(function () {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve(fallback);
+    });
+  });
+}
+
 // --- Provider API -----------------------------------------------------------
 function getInfo() {
   var names = { movies: 'DhakaFlix Movies', series: 'DhakaFlix Series', anime: 'DhakaFlix Anime' };
   return {
     name: names[KIND], lang: 'en', baseUrl: 'http://172.16.50.4/',
     logo: 'https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png',
-    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.3.1'
+    type: KIND === 'anime' ? 'anime' : 'movie', version: '1.4.0'
   };
 }
 
@@ -686,9 +741,8 @@ function _regexEscape(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function _searchServer(srv, pattern) {
-  var href = '/' + srv.share + '/';
-  return _h5ai(srv.host + href, { action: 'get', search: { href: href, pattern: pattern, ignorecase: true } })
+function _searchInScope(scope, pattern) {
+  return _h5ai(scope.host + scope.href, { action: 'get', search: { href: scope.href, pattern: pattern, ignorecase: true } })
     .then(function (j) {
       var hits = j.search || [], out = [];
       for (var i = 0; i < hits.length; i++) {
@@ -698,23 +752,111 @@ function _searchServer(srv, pattern) {
         // file, and a search result must be openable as a title.
         if (h.size !== null && h.size !== undefined) continue;
         if (!/\/$/.test(h.href)) continue;
-        out.push({ name: _segName(h.href), url: srv.host + h.href });
+        out.push({ name: _segName(h.href), url: scope.host + h.href });
       }
       return out;
     }).catch(function () { return []; });
 }
 
+function _scopesForKind() {
+  return SEARCH_SCOPES[KIND] || SEARCH_SCOPES.movies;
+}
+
+// A category folder often holds letter or year buckets, and a bucket is a much
+// smaller tree to scan than the whole category. When there are only a few
+// buckets, the search runs inside each of them — the server answers in a
+// fraction of the time, which is what keeps the Auto Resolve probe inside its
+// five seconds. Many buckets (a year list of thirty) are left alone.
+// The bucket list of a scope hardly ever changes, so it is remembered: every
+// later search skips that listing request.
+var _scopeBuckets = {};
+
+function _searchScopeTree(scope, pattern, split) {
+  if (split === false) return _searchInScope(scope, pattern).then(function (hits) { return [hits]; });
+  var cached = _scopeBuckets[scope.href];
+  if (cached) return _searchBuckets(cached, pattern);
+  return _list(scope.host + scope.href).then(function (children) {
+    var buckets = [];
+    for (var i = 0; i < children.length; i++) {
+      if (children[i].folder && _looksLikeBucket(children[i].name)) buckets.push(children[i]);
+    }
+    if (buckets.length < 2 || buckets.length > 12) {
+      _scopeBuckets[scope.href] = null;
+      return _searchInScope(scope, pattern).then(function (hits) { return [hits]; });
+    }
+    for (var bi = 0; bi < buckets.length; bi++) buckets[bi].host = scope.host;
+    _scopeBuckets[scope.href] = buckets;
+    return _searchBuckets(buckets, pattern);
+  }).catch(function () { return []; }).then(function (groups) {
+    var out = [];
+    for (var i = 0; i < groups.length; i++) {
+      var g = groups[i] || [];
+      for (var k = 0; k < g.length; k++) out = out.concat(g[k]);
+    }
+    return out;
+  });
+}
+
+function _searchBuckets(buckets, pattern) {
+  return _mapLimit(buckets, 6, function (b) {
+    return _searchInScope({ host: b.host, href: b.href }, pattern);
+  }).then(function (groups) {
+    var out = [];
+    for (var i = 0; i < groups.length; i++) {
+      var g = groups[i] || [];
+      for (var k = 0; k < g.length; k++) out = out.concat(g[k]);
+    }
+    return out;
+  });
+}
+
 var _searchCache = {};
+
+// Only the servers that actually hold this kind of content. Searching all
+// four doubled the wait, and Auto Resolve gives a source five seconds for the
+// whole match -> episodes -> sources chain.
+
+var STOPWORDS = { the: 1, and: 1, of: 1, a: 1, an: 1, to: 1, in: 1, is: 1, it: 1, for: 1, on: 1, at: 1, be: 1, no: 1, vs: 1 };
+
+// The catalogue title rarely matches the folder name word for word ("Kimetsu no
+// Yaiba" vs "Demon Slayer (TV Cartoon 2018)"). A pattern that matches ANY of
+// the significant words finds the folder, and it is also much cheaper for the
+// server than a multi-word literal — "Demon Slayer" took 9s on the big share,
+// "Demon|Slayer" took 1.3s.
+function _searchPattern(q) {
+  var words = String(q).split(/[^A-Za-z0-9\u0980-\u09FF]+/).filter(function (w) {
+    return w.length >= 3 && !STOPWORDS[w.toLowerCase()];
+  });
+  if (!words.length) {
+    words = String(q).split(/\s+/).filter(function (w) { return w.length > 0; });
+  }
+  if (!words.length) return _regexEscape(q);
+  var parts = [];
+  for (var i = 0; i < words.length && i < 3; i++) parts.push(_regexEscape(words[i]));
+  return parts.join('|');
+}
+
+// How close a result's title is to the query: every query word that shows up
+// in the title counts, and a title that starts with the query counts more.
+function _titleScore(title, queryWords) {
+  var low = String(title).toLowerCase();
+  var score = 0;
+  for (var i = 0; i < queryWords.length; i++) {
+    if (low.indexOf(queryWords[i]) >= 0) score += 10;
+  }
+  if (queryWords.length && low.indexOf(queryWords[0]) === 0) score += 6;
+  return score;
+}
 
 function search(query, page, opts) {
   var q = _trim(String(query || ''));
   if (!q) return Promise.resolve([]);
   var key = q.toLowerCase();
   if (_searchCache[key]) return Promise.resolve(_searchCache[key]);
-  var pattern = _regexEscape(key);
-  var servers = [];
-  for (var i = 0; i < SERVERS.length; i++) if (SERVERS[i].media) servers.push(SERVERS[i]);
-  return _mapLimit(servers, 3, function (srv) { return _searchServer(srv, pattern); }).then(function (lists) {
+  var pattern = _searchPattern(q);
+  var qWords = q.toLowerCase().split(/[^a-z0-9\u0980-\u09ff]+/).filter(function (w) { return w.length > 0; });
+  var scopes = _scopesForKind();
+  return _mapLimit(scopes, 6, function (sc) { return _searchScopeTree(sc, pattern); }).then(function (lists) {
     var out = [], seen = {};
     for (var i = 0; i < lists.length; i++) {
       var list = lists[i] || [];
@@ -729,11 +871,11 @@ function search(query, page, opts) {
         out.push(_item(r.name, r.url, null));
       }
     }
-    // Title matches rank above path matches ("Dune" before "The Sand Dune").
+    // Closest title first: the app picks its match from this list, so the
+    // folder that really is the requested title has to be at the top.
     out.sort(function (a, b) {
-      var at = a.title.toLowerCase().indexOf(key) === 0 ? 0 : 1;
-      var bt = b.title.toLowerCase().indexOf(key) === 0 ? 0 : 1;
-      if (at !== bt) return at - bt;
+      var as = _titleScore(a.title, qWords), bs = _titleScore(b.title, qWords);
+      if (as !== bs) return bs - as;
       return a.title < b.title ? -1 : a.title > b.title ? 1 : 0;
     });
     var capped = _stripInternal(out.slice(0, 80));
@@ -751,6 +893,10 @@ function _isSeasonName(name) {
 //   title folder with video files      -> those files as episodes
 //   title folder with season folders   -> the files inside those seasons
 function getDetail(url, opts) {
+  return _detailFor(url, true);
+}
+
+function _detailFor(url, withMeta) {
   var u = String(url);
   return _list(u).then(function (children) {
     var rawTitle = _segName(u);
@@ -782,7 +928,7 @@ function getDetail(url, opts) {
           for (var k = 0; k < files.length; k++) _pushFile(eps, files[k], sf);
         }).catch(function () {});
       }).then(function () {
-        return _detail(u, title, rawTitle, poster, _numbered(eps, title));
+        return _detail(u, title, rawTitle, poster, _numbered(eps, title), withMeta);
       });
     }
 
@@ -791,7 +937,7 @@ function getDetail(url, opts) {
     if (vids.length === 1 && !folders.length) {
       return _detail(u, title, rawTitle, poster, [{
         id: vids[0].url, title: title, number: 1, url: vids[0].url
-      }]);
+      }], withMeta);
     }
 
     // Group / year / letter folder: every child folder is a title card, plus
@@ -804,7 +950,7 @@ function getDetail(url, opts) {
       });
     }
     for (var i = 0; i < vids.length; i++) cards.push(_epFromFile(vids[i], cards.length + 1));
-    return _detail(u, title, rawTitle, poster, _numbered(cards, title));
+    return _detail(u, title, rawTitle, poster, _numbered(cards, title), withMeta);
   }).catch(function () {
     return null;
   });
@@ -867,7 +1013,7 @@ function _poster(entries) {
   return null;
 }
 
-function _detail(url, title, rawTitle, poster, episodes) {
+function _detail(url, title, rawTitle, poster, episodes, withMeta) {
   var year = _yearOf(title);
   var base = {
     id: url, title: title, url: url, description: null,
@@ -878,6 +1024,7 @@ function _detail(url, title, rawTitle, poster, episodes) {
     episodes: episodes, year: (year == null ? null : String(year)),
     cast: [], tmdbId: null, tmdbIsTv: false
   };
+  if (!withMeta) return base;
   // TMDB fills in a poster, a plot, a rating and the tracking id. It is a
   // nice-to-have: a failure leaves the local detail untouched.
   return _tmdbFor(title, rawTitle).then(function (meta) {
@@ -896,15 +1043,22 @@ function _detail(url, title, rawTitle, poster, episodes) {
   }).catch(function () { return base; });
 }
 
+// The episode LIST is what Auto Resolve probes, and it has five seconds for
+// the whole chain — so this path skips the TMDB lookup entirely and answers
+// with the local files only.
 function getEpisodes(url, opts) {
-  return getDetail(url, opts).then(function (d) { return d ? d.episodes : []; });
+  return _detailFor(url, false).then(function (d) { return d ? d.episodes : []; });
 }
 
 // A direct file plays as-is. A folder resolves to its biggest videos (a title
 // card reached straight from a group listing). nginx serves these statically
 // with Range support, so seeking works without any proxy.
-function getVideoSources(episodeUrl) {
+function getVideoSources(episodeUrl, fast) {
   var u = String(episodeUrl);
+  // The app asks for a fast answer while it resolves playback (the Auto
+  // Resolve probe has five seconds for match + episodes + sources) and for the
+  // full list when it downloads. The slow part is the hunt for another release
+  // of the same title, so that is what a fast call skips.
   // A trailing slash is the usual folder marker, but the app is free to strip
   // it — the real test is whether the path names a media file at all. Missing
   // that made a card resolve to a folder URL and the player fail to open it.
@@ -916,13 +1070,30 @@ function getVideoSources(episodeUrl) {
     // A 10-bit HEVC file cannot be decoded by most phones, and a 720p file is
     // a waste when a 1080p H.264 release of the same title exists elsewhere
     // on the server. Look for it either way.
-    var wantBetter = !(_isPlayable(name) && _quality(name) === '1080p');
-    if (!wantBetter) return Promise.resolve(_sourcesFromFiles(own));
-    // The FOLDER name is the title ("Dune (2021) 1080p HMAX"); the file name
-    // carries the release tags and would not match the other release.
-    return _alternativeFiles(parent, _segName(parent)).then(function (alt) {
-      return _sourcesFromFiles(alt.concat(own));
-    });
+    var playable = _isPlayable(name);
+    // A file the phone cannot decode (10-bit HEVC) is worth waiting for: the
+    // other release of the same title is the difference between a picture and
+    // a black screen.
+    if (!playable) {
+      var altPromise = _alternativeFiles(parent, _segName(parent));
+      if (fast) {
+        return _withTimeout(altPromise, 1800, []).then(function (alt) {
+          return _sourcesFromFiles(alt.concat(own));
+        });
+      }
+      return altPromise.then(function (alt) {
+        return _sourcesFromFiles(alt.concat(own));
+      });
+    }
+    // A fast answer skips the hunt for a BETTER release (a 720p file when a
+    // 1080p one exists elsewhere) — that is a nicety, not a fix.
+    if (fast) return Promise.resolve(_sourcesFromFiles(own));
+    if (_quality(name) !== '1080p') {
+      return _alternativeFiles(parent, _segName(parent)).then(function (alt) {
+        return _sourcesFromFiles(alt.concat(own));
+      });
+    }
+    return Promise.resolve(_sourcesFromFiles(own));
   }
   return _list(u).then(function (children) {
     var vids = _videos(children);
@@ -932,6 +1103,21 @@ function getVideoSources(episodeUrl) {
         if (_isPlayable(vids[p].name) && _quality(vids[p].name) === '1080p') { best1080 = true; break; }
       }
       if (best1080) return _sourcesFromFiles(vids);
+      var anyPlayable = false;
+      for (var q = 0; q < vids.length; q++) if (_isPlayable(vids[q].name)) { anyPlayable = true; break; }
+      // Nothing here plays: the other release of this title is worth the wait.
+      if (!anyPlayable) {
+        var altPromise2 = _alternativeFiles(u, _segName(u));
+        if (fast) {
+          return _withTimeout(altPromise2, 1800, []).then(function (alt) {
+            return _sourcesFromFiles(alt.concat(vids));
+          });
+        }
+        return altPromise2.then(function (alt) {
+          return _sourcesFromFiles(alt.concat(vids));
+        });
+      }
+      if (fast) return _sourcesFromFiles(vids);
       return _alternativeFiles(u, _segName(u)).then(function (alt) {
         return _sourcesFromFiles(alt.concat(vids));
       });
@@ -966,8 +1152,11 @@ function getVideoSources(episodeUrl) {
 // the label still names the resolution, so it stays one tap away in the
 // Sources sheet for anyone whose device can play it.
 function _sourcesFromFiles(files) {
-  var playable = [], rest = [];
+  var playable = [], rest = [], seen = {};
   for (var i = 0; i < files.length; i++) {
+    var u = String(files[i].url);
+    if (seen[u]) continue;
+    seen[u] = 1;
     if (_isPlayable(files[i].name)) playable.push(files[i]); else rest.push(files[i]);
   }
   playable.sort(function (a, b) { return _scoreFile(b.name) - _scoreFile(a.name); });
