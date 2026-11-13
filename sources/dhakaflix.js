@@ -771,8 +771,9 @@ function _scopesForKind() {
 // later search skips that listing request.
 var _scopeBuckets = {};
 
+// Always answers with a flat list of hits.
 function _searchScopeTree(scope, pattern, split) {
-  if (split === false) return _searchInScope(scope, pattern).then(function (hits) { return [hits]; });
+  if (split === false) return _searchInScope(scope, pattern);
   var cached = _scopeBuckets[scope.href];
   if (cached) return _searchBuckets(cached, pattern);
   return _list(scope.host + scope.href).then(function (children) {
@@ -782,19 +783,12 @@ function _searchScopeTree(scope, pattern, split) {
     }
     if (buckets.length < 2 || buckets.length > 12) {
       _scopeBuckets[scope.href] = null;
-      return _searchInScope(scope, pattern).then(function (hits) { return [hits]; });
+      return _searchInScope(scope, pattern);
     }
     for (var bi = 0; bi < buckets.length; bi++) buckets[bi].host = scope.host;
     _scopeBuckets[scope.href] = buckets;
     return _searchBuckets(buckets, pattern);
-  }).catch(function () { return []; }).then(function (groups) {
-    var out = [];
-    for (var i = 0; i < groups.length; i++) {
-      var g = groups[i] || [];
-      for (var k = 0; k < g.length; k++) out = out.concat(g[k]);
-    }
-    return out;
-  });
+  }).catch(function () { return []; });
 }
 
 function _searchBuckets(buckets, pattern) {
@@ -823,28 +817,40 @@ var STOPWORDS = { the: 1, and: 1, of: 1, a: 1, an: 1, to: 1, in: 1, is: 1, it: 1
 // the significant words finds the folder, and it is also much cheaper for the
 // server than a multi-word literal — "Demon Slayer" took 9s on the big share,
 // "Demon|Slayer" took 1.3s.
-function _searchPattern(q) {
-  var words = String(q).split(/[^A-Za-z0-9\u0980-\u09FF]+/).filter(function (w) {
+// The words of a query that carry meaning: three letters or more, and not a
+// filler word. A one-letter word like the "x" in "Hunter x Hunter" is noise
+// as a search term and poison as a scoring term.
+function _queryWords(q) {
+  return String(q).split(/[^A-Za-z0-9\u0980-\u09FF]+/).filter(function (w) {
     return w.length >= 3 && !STOPWORDS[w.toLowerCase()];
   });
-  if (!words.length) {
-    words = String(q).split(/\s+/).filter(function (w) { return w.length > 0; });
-  }
+}
+
+function _searchPattern(q) {
+  var words = _queryWords(q);
   if (!words.length) return _regexEscape(q);
-  var parts = [];
-  for (var i = 0; i < words.length && i < 3; i++) parts.push(_regexEscape(words[i]));
+  var parts = [], seen = {};
+  for (var i = 0; i < words.length && parts.length < 3; i++) {
+    var w = words[i].toLowerCase();
+    if (seen[w]) continue;
+    seen[w] = 1;
+    parts.push(_regexEscape(words[i]));
+  }
   return parts.join('|');
 }
 
 // How close a result's title is to the query: every query word that shows up
 // in the title counts, and a title that starts with the query counts more.
-function _titleScore(title, queryWords) {
+function _titleScore(title, queryWords, queryNorm) {
   var low = String(title).toLowerCase();
   var score = 0;
   for (var i = 0; i < queryWords.length; i++) {
     if (low.indexOf(queryWords[i]) >= 0) score += 10;
   }
   if (queryWords.length && low.indexOf(queryWords[0]) === 0) score += 6;
+  // The whole query in the title ("Hunter x Hunter") beats a title that
+  // merely mentions one of its words.
+  if (queryNorm && low.indexOf(queryNorm) >= 0) score += 20;
   return score;
 }
 
@@ -854,7 +860,8 @@ function search(query, page, opts) {
   var key = q.toLowerCase();
   if (_searchCache[key]) return Promise.resolve(_searchCache[key]);
   var pattern = _searchPattern(q);
-  var qWords = q.toLowerCase().split(/[^a-z0-9\u0980-\u09ff]+/).filter(function (w) { return w.length > 0; });
+  var qWords = _queryWords(q).map(function (w) { return w.toLowerCase(); });
+  var qNorm = _normTitle(q);
   var scopes = _scopesForKind();
   return _mapLimit(scopes, 6, function (sc) { return _searchScopeTree(sc, pattern); }).then(function (lists) {
     var out = [], seen = {};
@@ -874,7 +881,7 @@ function search(query, page, opts) {
     // Closest title first: the app picks its match from this list, so the
     // folder that really is the requested title has to be at the top.
     out.sort(function (a, b) {
-      var as = _titleScore(a.title, qWords), bs = _titleScore(b.title, qWords);
+      var as = _titleScore(a.title, qWords, qNorm), bs = _titleScore(b.title, qWords, qNorm);
       if (as !== bs) return bs - as;
       return a.title < b.title ? -1 : a.title > b.title ? 1 : 0;
     });
