@@ -5,7 +5,7 @@
     {
       "id": "dhakaflix_movies",
       "name": "DhakaFlix Movies",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "type": "movie",
       "lang": "en",
       "file": "sources/dhakaflix.js",
@@ -15,7 +15,7 @@
     {
       "id": "dhakaflix_series",
       "name": "DhakaFlix Series",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "type": "movie",
       "lang": "en",
       "file": "sources/dhakaflix.js",
@@ -25,7 +25,7 @@
     {
       "id": "dhakaflix_anime",
       "name": "DhakaFlix Anime",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "type": "anime",
       "lang": "en",
       "file": "sources/dhakaflix.js",
