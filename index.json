@@ -1,6 +1,6 @@
 {
-  "name": "Mamun015 Zangetsu Sources",
-  "description": "Zangetsu sources for BDIX file servers (DhakaFlix, Circle FTP, Dflix, ICC Ftp) — movies, TV series and anime, straight from the local network.",
+  "name": "🇧🇩 Mamun015 BDIX",
+  "description": "🇧🇩 Bangladesh BDIX sources for DhakaFlix, Circle FTP, Dflix and ICC Ftp — movies, TV series and anime, straight from the local network.",
   "sources": [
     {
       "id": "dhakaflix_movies",
