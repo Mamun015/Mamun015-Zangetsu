@@ -1,27 +1,27 @@
 // MovieNestBD provider for Zangetsu.
 //
 // MovieNestBD (https://movienestbd.best) is a public movie / web-series /
-// anime site with server-rendered pages. Listings are <a.movie-card> cards;
-// detail pages carry the title, poster, plot, year and either an episode
-// list (series) or media ids (movies). Playback goes through a jiofiles /
-// xcloud HLS chain that is resolved per title.
+// anime site with server-rendered pages. Listings are <a class="movie-card">
+// cards; a detail page carries the title, poster, plot, year and either an
+// episode list (series) or a quality list (movie). Playback resolves a media
+// id through /player/<id> to an xcloud HLS stream.
 //
 // Ported from the MovieNestBD CloudStream extension
 // (mamun015/mamun015-cloudstream-bdix, Movienestbd module).
 //
 // ONE file, loaded once as sourceId `movienestbd`. Every failure degrades
-// to an empty list instead of throwing, exactly like the other sources in
-// this repo.
+// to an empty list instead of throwing, exactly like the other sources here.
 
 var UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
 var BASE = 'https://movienestbd.best';
-var LOGO = BASE + '/favicon.png';
-var VERSION = '1.0.0';
-var SEARCH_TIMEOUT_MS = 7000;
-var DETAIL_TIMEOUT_MS = 9000;
-var PLAYER_TIMEOUT_MS = 12000;
+var SITE = 'movienestbd';
 
-var MAX_SOURCES = 6;
+var VERSION = '1.0.1';
+var LIST_TIMEOUT_MS = 12000;
+var DETAIL_TIMEOUT_MS = 12000;
+var PLAYER_TIMEOUT_MS = 15000;
+
+var MAX_QUALITIES = 4;
 
 // ---------- small helpers ----------
 
@@ -32,228 +32,341 @@ function _trim(s) {
 function _stripTags(s) {
   return String(s == null ? '' : s)
     .replace(/<[^>]*>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/^\s+|\s+$/g, '');
 }
 
-function _attr(html, name) {
+function _attr(tag, name) {
   var re = new RegExp(name + '\\s*=\\s*"([^"]*)"', 'i');
-  var m = re.exec(html);
+  var m = re.exec(String(tag));
   return m ? m[1] : null;
-}
-
-function _findAll(html, re) {
-  var out = [], m;
-  re.lastIndex = 0;
-  while ((m = re.exec(html))) out.push(m[1]);
-  return out;
 }
 
 function _unescapeSlashes(s) {
   return String(s).replace(/\\\//g, '/');
 }
 
-// Site data escapes slashes, e.g. "https:\/\/player.jiofiles.pics\/abc".
-// CloudStream's unescape does exactly this.
-
-// ---------- search ----------
-
-// Each listing card: <a ... class="...movie-card..." ...> ... </a>
-var RE_CARD = /<a\b[\s\S]*?\bmovie-card\b[\s\S]*?<\/a>/gi;
-var RE_HREF = /href\s*=\s*"([^"]*)"/i;
-var RE_H3 = /<h3[^>]*>([\s\S]*?)<\/h3>/i;
-var RE_SPAN = /<span[^>]*>([\s\S]*?)<\/span>/gi;
-var RE_IMG = /<img[^>]*?(?:src|data-src)\s*=\s*"([^"]*)"/i;
-var RE_YEAR = /\b(19|20)\d{2}\b/;
-var RE_BADGE_ANIME = /anime/i;
-var RE_BADGE_SERIES = /series/i;
-
-function _searchCards(html) {
-  var cards = [], m;
-  RE_CARD.lastIndex = 0;
-  while ((m = RE_CARD.exec(html))) cards.push(m[0]);
-  return cards;
+// Site links escape slashes as "\/file\/...".
+function _absolute(href) {
+  var h = _trim(_unescapeSlashes(href || ''));
+  if (!h) return null;
+  if (h.indexOf('http') === 0) return h;
+  if (h.indexOf('//') === 0) return 'https:' + h;
+  if (h.charAt(0) === '/') return BASE + h;
+  return BASE + '/' + h;
 }
 
-function _cardItem(card, qKey) {
-  var href = _attr(card, 'href');
-  if (!href) return null;
-  var url = href.startsWith('http', true) ? href : (href.startsWith('/') ? BASE + href : BASE + '/' + href);
+// base64url -> text. atob is not guaranteed inside the QuickJS sandbox, so the
+// decoder is written out by hand.
+var B64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
-  var h3m = RE_H3.exec(card);
-  var heading = h3m ? h3m[1] : '';
-  var yearText = '';
-  var ym = RE_SPAN.exec(heading);
-  if (ym) { yearText = ym[1]; RE_SPAN.lastIndex = 0; heading = heading.replace(ym[0], ' '); }
-  var title = _stripTags(heading);
-  if (!title) {
-    var alt = _attr(card, 'alt');
-    title = _trim(alt || '');
+function _b64decode(s) {
+  var str = String(s).replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
+  var out = '', i, c1, c2, c3, c4;
+  for (i = 0; i < str.length; i += 4) {
+    c1 = B64_CHARS.indexOf(str.charAt(i));
+    c2 = B64_CHARS.indexOf(str.charAt(i + 1));
+    if (c1 < 0 || c2 < 0) break;
+    out += String.fromCharCode((c1 << 2) | (c2 >> 4));
+    c3 = B64_CHARS.indexOf(str.charAt(i + 2));
+    if (c3 < 0) break;
+    out += String.fromCharCode(((c2 & 15) << 4) | (c3 >> 2));
+    c4 = B64_CHARS.indexOf(str.charAt(i + 3));
+    if (c4 < 0) break;
+    out += String.fromCharCode(((c3 & 3) << 6) | c4);
   }
+  return out;
+}
+
+// A media id is 24 alphanumeric characters. The site hands out three shapes:
+//   /file/<base64url>   -> decodes to id|slug|ts|sig
+//   https://embed.jiofiles.pics/<id>
+//   <id>
+var RE_FILE_TOKEN = /\/file\/([A-Za-z0-9_-]+)/;
+
+function _mediaId(link) {
+  var s = _trim(_unescapeSlashes(link || ''));
+  if (!s) return null;
+  var fm = RE_FILE_TOKEN.exec(s);
+  if (fm) {
+    var decoded = _b64decode(fm[1]);
+    var first = decoded.split('|')[0];
+    if (/^[a-zA-Z0-9]{24}$/.test(first)) return first;
+    var dm = /[a-zA-Z0-9]{24}/.exec(decoded);
+    return dm ? dm[0] : null;
+  }
+  var m = /(?:embed|player)\.jiofiles\.[a-z]+\/([a-zA-Z0-9]{24})/i.exec(s);
+  if (m) return m[1];
+  var any = /[a-zA-Z0-9]{24}/.exec(s);
+  return any ? any[0] : null;
+}
+
+// ---------- listing cards ----------
+
+// Only real card anchors: an <a> whose own class list contains movie-card.
+// Parsing CSS (".movie-card {") or a nav <a> was what broke search before.
+var RE_CARD_OPEN = /<a\b[^>]*class="[^"]*\bmovie-card\b[^"]*"[^>]*>/gi;
+var RE_IMG_SRC = /<img[^>]*\bsrc\s*=\s*"([^"]+)"/i;
+var RE_H3 = /<h3[^>]*>([\s\S]*?)<\/h3>/i;
+var RE_TYPE_BADGE = /<div[^>]*class="[^"]*bottom-1\.5 right-1\.5[^"]*"[^>]*>([\s\S]*?)<\/div>/i;
+var RE_TRAILING_YEAR = /\((\d{4})\)\s*$/;
+var RE_24_HEX = /[a-f0-9]{24}/i;
+
+function _cards(html) {
+  var out = [], m, start, end;
+  RE_CARD_OPEN.lastIndex = 0;
+  while ((m = RE_CARD_OPEN.exec(html))) {
+    start = RE_CARD_OPEN.lastIndex;
+    end = html.indexOf('</a>', start);
+    if (end < 0) break;
+    out.push({ open: m[0], body: html.slice(start, end) });
+    RE_CARD_OPEN.lastIndex = end + 4;
+  }
+  return out;
+}
+
+function _cardItem(card, forceType) {
+  var url = _absolute(_attr(card.open, 'href'));
+  if (!url) return null;
+
+  var h3 = RE_H3.exec(card.body);
+  var title = h3 ? _stripTags(h3[1]) : '';
+  var year = null;
+  var ym = RE_TRAILING_YEAR.exec(title);
+  if (ym) {
+    year = ym[1];
+    title = _trim(title.replace(/\(\d{4}\)\s*$/, ''));
+  }
+  if (!title) title = _trim(_attr(card.body, 'alt') || '');
   if (!title) return null;
 
-  var poster = _attr(card, 'src') || _attr(card, 'data-src') || null;
-  if (poster && poster.startsWith('/')) poster = BASE + poster;
+  var poster = null;
+  var im = RE_IMG_SRC.exec(card.body);
+  if (im && im[1].indexOf('data:') !== 0) poster = _absolute(im[1]);
 
-  var type = 'movie';
-  if (RE_BADGE_ANIME.test(card)) type = 'anime';
-  else if (RE_BADGE_SERIES.test(card)) type = 'series';
+  var type = forceType || 'movie';
+  if (!forceType) {
+    var badge = RE_TYPE_BADGE.exec(card.body);
+    var label = badge ? _stripTags(badge[1]).toUpperCase() : '';
+    if (label.indexOf('ANIME') >= 0) type = 'anime';
+  }
 
-  var y = null;
-  var ym2 = RE_YEAR.exec(yearText);
-  if (ym2) y = Number(ym2[0]);
-
-  var item = {
+  return {
     id: url,
     url: url,
     title: title,
     type: type,
-    cover: poster || null,
+    sourceId: SITE,
+    cover: poster,
     description: null,
-    sourceId: 'movienestbd',
-    year: y
+    year: year
   };
-  return item;
 }
+
+function _parseCards(html, forceType) {
+  var cards = _cards(html), out = [], item;
+  for (var i = 0; i < cards.length; i++) {
+    item = _cardItem(cards[i], forceType);
+    if (item) out.push(item);
+  }
+  return out;
+}
+
+// ---------- search ----------
 
 function search(query, page, opts) {
   var q = _trim(String(query || ''));
   if (!q) return Promise.resolve([]);
   var url = BASE + '/search?q=' + encodeURIComponent(q).replace(/%20/g, '+');
-  var timeoutMs = (opts && opts.timeoutMs) || SEARCH_TIMEOUT_MS;
+  if (page && Number(page) > 1) url += '&page=' + Number(page);
+  var timeoutMs = (opts && opts.timeoutMs) || LIST_TIMEOUT_MS;
 
   return fetch(url, { headers: { 'User-Agent': UA }, timeoutMs: timeoutMs })
     .then(function (r) {
       if (!r || !r.ok) return [];
-      var html = String(r.body || '');
-      var cards = _searchCards(html);
-      var out = [];
-      for (var i = 0; i < cards.length; i++) {
-        var it = _cardItem(cards[i]);
-        if (it) out.push(it);
-      }
-      return out;
+      return _parseCards(String(r.body || ''));
     })
     .catch(function () { return []; });
 }
 
 // ---------- detail ----------
 
-var RE_MAIN_H1 = /<main[\s\S]*?<h1[^>]*>([\s\S]*?)<\/h1>/i;
+var RE_H1 = /<h1[^>]*>([\s\S]*?)<\/h1>/i;
 var RE_OG_IMAGE = /<meta[^>]*property\s*=\s*"og:image"[^>]*content\s*=\s*"([^"]*)"/i;
-var RE_DESC = /<meta[^>]*name\s*=\s*"description"[^>]*content\s*=\s*"([^"]*)"/i;
-var RE_YEAR_SPAN = /<span[^>]*class="[^"]*bg-white\/10[^"]*"[^>]*>([\s\S]*?)<\/span>/i;
-var RE_SCORE = /#display-rating-score[\s\S]*?([\d.]+)/i;
-var RE_GENRE = /<a[^>]*href\s*=\s*"\/[^"]*\/genre\/[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
-var RE_LANG = /<a[^>]*href\s*=\s*"\/[^"]*\/language\/[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
-var RE_ACTOR = /<a[^>]*href\s*=\s*"\/[^"]*\/actor\/[^"]*"[^>]*>([\s\S]*?)<\/a>/gi;
+var RE_DESCRIPTION = /<meta[^>]*name\s*=\s*"description"[^>]*content\s*=\s*"([^"]*)"/i;
+var RE_YEAR_SPAN = /<span[^>]*class="[^"]*bg-white\/10[^"]*"[^>]*>\s*(\d{4})\s*<\/span>/i;
+var RE_SCORE_SPAN = /id="display-rating-score"[^>]*>\s*([\d.]+)/i;
+var RE_IS_SERIES = /const\s+isSeries\s*=\s*(true|false)/i;
+var RE_IS_ANIME = /const\s+isAnime\s*=\s*(true|false)/i;
 
-// Episode block inside the detail page script: rawEpisodes = [ {...}, {...} ];
+// rawEpisodes = [ { name: "E1", link: "https:\/\/embed.jiofiles.pics\/<id>", size: "..." } ]
 var RE_EPISODES_BLOCK = /rawEpisodes\s*=\s*\[([\s\S]*?)\];/;
 var RE_EPISODE_ENTRY = /\{\s*name\s*:\s*"([^"]*)"\s*,\s*link\s*:\s*"([^"]*)"/g;
 
-// Movie source entries in the detail page script.
-var RE_LINK_ENTRY = /\{\s*name\s*:\s*"[^"]*"\s*,\s*link\s*:\s*"([^"]*)"\s*,\s*quality\s*:\s*"([^"]*)"/g;
-var RE_EMBED_ID = /(?:embed|player)\.jiofiles\.pics\/([a-zA-Z0-9]{24})/;
-var RE_ID24 = /[a-zA-Z0-9]{24}/;
+// rawLinks = [ { name: "E1" | "", link: "\/file\/<token>", quality: "1080P", ... } ]
+var RE_LINKS_BLOCK = /rawLinks\s*=\s*\[([\s\S]*?)\];/;
+var RE_LINK_ENTRY = /\{\s*name\s*:\s*"([^"]*)"\s*,\s*link\s*:\s*"([^"]*)"\s*,\s*quality\s*:\s*"([^"]*)"/g;
 
-function _mediaIdFromLink(link) {
-  if (!link || link.indexOf('/file/', 0) >= 0) return null;
-  var m = RE_ID24.exec(link);
-  return m ? m[0] : null;
+function _qualityRank(q) {
+  var m = /(\d{3,4})/.exec(String(q || ''));
+  if (m) return Number(m[1]);
+  if (/4k|uhd/i.test(q)) return 2160;
+  return 0;
 }
 
-function _episodesFromBlock(block, url) {
-  var out = [];
+function _seasonOf(pageUrl) {
+  var m = /-s(\d{1,2})$/i.exec(String(pageUrl || ''));
+  return m ? Number(m[1]) : 1;
+}
+
+function _episodesFromRaw(block, season) {
+  var out = [], m, n = 0, label, id, num;
   if (!block) return out;
-  var season = 1;
-  var sm = /-s(\d{1,2})(?:$|\/)/i.exec(url);
-  if (sm) season = Number(sm[1]);
   RE_EPISODE_ENTRY.lastIndex = 0;
-  var m, n = 0;
   while ((m = RE_EPISODE_ENTRY.exec(block))) {
-    var id = _mediaIdFromLink(m[2]);
+    id = _mediaId(m[2]);
     if (!id) continue;
-    var label = _trim(m[1]);
-    var num = /\d+/.exec(label);
-    num = num ? Number(num[0]) : ++n;
-    out.push({ id: id, url: id, title: label || ('Episode ' + num), number: num, season: season });
+    label = _trim(m[1]);
+    num = /(\d+)/.exec(label);
+    n += 1;
+    out.push({
+      id: id,
+      url: id,
+      title: label || ('Episode ' + n),
+      number: num ? Number(num[1]) : n,
+      season: season || 1
+    });
   }
   return out;
 }
 
-function _movieMediaIds(html) {
-  var ids = [], seen = {}, m;
+function _linksFromRaw(block) {
+  var out = [], m, id;
+  if (!block) return out;
   RE_LINK_ENTRY.lastIndex = 0;
-  while ((m = RE_LINK_ENTRY.exec(html))) {
-    var id = _mediaIdFromLink(m[1]);
-    if (id && !seen[id]) { seen[id] = true; ids.push(id); }
+  while ((m = RE_LINK_ENTRY.exec(block))) {
+    id = _mediaId(m[2]);
+    if (!id) continue;
+    out.push({ name: _trim(m[1]), id: id, quality: _trim(m[3]) });
   }
-  RE_EMBED_ID.lastIndex = 0;
-  while ((m = RE_EMBED_ID.exec(html))) {
-    if (!seen[m[1]]) { seen[m[1]] = true; ids.push(m[1]); }
-  }
-  return ids.slice(0, MAX_SOURCES);
+  return out;
 }
 
-function getDetail(id) {
-  var url = String(id || '');
-  if (!url) return Promise.resolve(null);
-  return fetch(url, { headers: { 'User-Agent': UA }, timeoutMs: DETAIL_TIMEOUT_MS })
+// A movie has one entry in the player, so all its quality links are folded into
+// that one episode id: "<id>#<quality>,<id>#<quality>". getVideoSources splits
+// it back apart and returns one VideoSource per quality.
+function _movieEpisode(links) {
+  var seen = {}, parts = [], qualities = [], i, l, key;
+  for (i = 0; i < links.length; i++) {
+    l = links[i];
+    key = l.id + '#' + l.quality;
+    if (seen[key]) continue;
+    seen[key] = true;
+    parts.push(key);
+    if (l.quality) qualities.push(l.quality);
+  }
+  if (!parts.length) return null;
+  return {
+    id: parts.join(','),
+    url: parts.join(','),
+    title: qualities.length ? 'Movie \u00b7 ' + qualities.join(' / ') : 'Movie',
+    number: 1
+  };
+}
+
+function getDetail(url) {
+  var pageUrl = _absolute(url);
+  if (!pageUrl) return Promise.resolve(null);
+
+  return fetch(pageUrl, { headers: { 'User-Agent': UA }, timeoutMs: DETAIL_TIMEOUT_MS })
     .then(function (r) {
       if (!r || !r.ok) return null;
       var html = String(r.body || '');
+
       var title = '';
-      var hm = RE_MAIN_H1.exec(html);
+      var hm = RE_H1.exec(html);
       if (hm) title = _stripTags(hm[1]);
       if (!title) return null;
 
+      var poster = null;
       var pm = RE_OG_IMAGE.exec(html);
-      var poster = pm ? pm[1] : null;
-      if (!poster) {
-        var wm = /<div[^>]*class="[^"]*w-48[^"]*"[\s\S]*?<img[^>]*src\s*=\s*"([^"]*)"/i.exec(html);
-        poster = wm ? wm[1] : null;
-      }
-      if (poster && poster.startsWith('/')) poster = BASE + poster;
+      if (pm) poster = _absolute(pm[1]);
 
       var plot = null;
-      var dm = RE_DESC.exec(html);
+      var dm = RE_DESCRIPTION.exec(html);
       if (dm) plot = _trim(dm[1]);
 
       var year = null;
       var ym = RE_YEAR_SPAN.exec(html);
-      if (ym) { var y2 = RE_YEAR.exec(ym[1]); if (y2) year = Number(y2[0]); }
+      if (ym) year = ym[1];
 
       var score = null;
-      var sc = RE_SCORE.exec(html);
-      if (sc) score = Number(sc[1]);
-
-      var genres = _findAll(html, RE_GENRE).map(function (g) { return _trim(g); }).filter(Boolean);
-      var langs = _findAll(html, RE_LANG).map(function (g) { return _trim(g); }).filter(Boolean);
-
-      var block = RE_EPISODES_BLOCK.exec(html);
-      block = block ? block[1] : null;
-      var eps = _episodesFromBlock(block, url);
-      var isSeries = eps.length > 0 || /isSeries\s*=\s*true/i.test(html);
-      var isAnime = /isAnime\s*=\s*true/i.test(html);
-
-      if (isSeries) {
-        if (eps.length === 0) return null;
-        return {
-          id: url, url: url, title: title, type: isAnime ? 'anime' : 'series',
-          cover: poster, plot: plot, year: year, rating: score,
-          genres: genres, languages: langs,
-          episodes: eps
-        };
+      var sm = RE_SCORE_SPAN.exec(html);
+      if (sm) {
+        var num = parseFloat(sm[1]);
+        if (!isNaN(num)) score = Math.round(num * 10);
       }
 
-      var mediaIds = _movieMediaIds(html);
-      if (mediaIds.length === 0) return null;
+      var seriesFlag = RE_IS_SERIES.exec(html);
+      var isSeries = seriesFlag ? seriesFlag[1].toLowerCase() === 'true' : false;
+      var animeFlag = RE_IS_ANIME.exec(html);
+      var isAnime = animeFlag ? animeFlag[1].toLowerCase() === 'true' : false;
+
+      var epBlock = RE_EPISODES_BLOCK.exec(html);
+      var linkBlock = RE_LINKS_BLOCK.exec(html);
+
+      var episodes = [];
+      if (isSeries) {
+        var season = _seasonOf(pageUrl);
+        episodes = _episodesFromRaw(epBlock ? epBlock[1] : null, season);
+        if (!episodes.length) {
+          // Some series only list their episodes as file links.
+          var all = _linksFromRaw(linkBlock ? linkBlock[1] : null);
+          var used = {};
+          for (var e = 0; e < all.length; e++) {
+            if (!all[e].name || /^zip$/i.test(all[e].name)) continue;
+            if (used[all[e].id]) continue;
+            used[all[e].id] = true;
+            episodes.push({
+              id: all[e].id,
+              url: all[e].id,
+              title: all[e].name,
+              number: episodes.length + 1,
+              season: season
+            });
+          }
+        }
+        if (!episodes.length) return null;
+      } else {
+        var links = _linksFromRaw(linkBlock ? linkBlock[1] : null);
+        links.sort(function (a, b) { return _qualityRank(b.quality) - _qualityRank(a.quality); });
+        if (links.length > MAX_QUALITIES) links = links.slice(0, MAX_QUALITIES);
+        var movie = _movieEpisode(links);
+        if (!movie) return null;
+        episodes = [movie];
+      }
+
       return {
-        id: url, url: url, title: title, type: 'movie',
-        cover: poster, plot: plot, year: year, rating: score,
-        genres: genres, languages: langs,
-        mediaIds: mediaIds
+        id: pageUrl,
+        url: pageUrl,
+        title: title,
+        type: isAnime ? 'anime' : 'movie',
+        sourceId: SITE,
+        cover: poster,
+        description: plot,
+        year: year,
+        score: score,
+        status: 'unknown',
+        genres: [],
+        studios: [],
+        cast: [],
+        episodes: episodes
       };
     })
     .catch(function () { return null; });
@@ -261,107 +374,127 @@ function getDetail(id) {
 
 function getEpisodes(url, opts) {
   return getDetail(url).then(function (d) {
-    if (!d) return [];
-    if (d.episodes) return d.episodes;
-    // Movie: a single playable "episode".
-    var ids = d.mediaIds || [];
-    if (ids.length === 0) return [];
-    return ids.map(function (id, i) {
-      return { id: id, url: id, title: 'Episode ' + (i + 1), number: i + 1, season: 1 };
-    });
+    return d && d.episodes ? d.episodes : [];
   }).catch(function () { return []; });
 }
 
 // ---------- playback ----------
 
-// xcloud iframe inside /player/<id>
-var RE_IFRAME = /<iframe[^>]*?src\s*=\s*"([^"]+)"/gi;
-// Direct stream page (fallback): https://.../stream_<16 hex>
-var RE_STREAM_URL = /https?:\/\/[a-zA-Z0-9.-]+\/[a-zA-Z0-9_\/_-]*stream_[0-9a-f]{16}/i;
-// Inside the stream / xcloud page:
-var RE_HLS_URL = /hlsUrl\s*:\s*"([^"]+)"/i;
-var RE_DRIVE_ID = /encodedDriveId\s*:\s*"([^"]+)"/i;
-var RE_WORKERS = /workerPools\s*:\s*\[([^\]]*)\]/i;
-var RE_WORKER_URL = /https:[^"',\s]+/i;
+var RE_IFRAME = /<iframe[^>]*\bsrc\s*=\s*"([^"]+)"/i;
+var RE_HLS_URL = /hlsUrl\s*:\s*"([^"]+)"/;
+var RE_PHOTOS_HLS = /photosHlsUrl\s*:\s*"([^"]+)"/;
+var RE_DRIVE_ID = /encodedDriveId\s*:\s*"([^"]+)"/;
+var RE_WORKER_POOLS = /workerPools\s*:\s*\[([^\]]*)\]/;
+var RE_WORKER_URL = /https?:\/\/[^"',\s\\]+/;
+var RE_STREAM_URL = /https?:\/\/[a-zA-Z0-9.-]+\/[^\s"'<>]*stream_[0-9a-f]+/;
 
-var JSON_HEADERS = {
+var PLAY_HEADERS = { 'User-Agent': UA };
+var API_HEADERS = {
   'User-Agent': UA,
-  'Accept-Encoding': 'identity',
-  'Content-Type': 'application/json'
+  'Accept': 'application/json, text/plain, */*',
+  'Content-Type': 'application/json',
+  'Accept-Encoding': 'identity'
 };
 
-function _absolute(href) {
-  if (!href) return null;
-  if (href.startsWith('http', true)) return href;
-  if (href.startsWith('//')) return 'https:' + href;
-  if (href.startsWith('/')) return BASE + href;
-  return BASE + '/' + href;
+function _postEncode(worker, driveId) {
+  return fetch(worker + '/api/encode', {
+    method: 'POST',
+    headers: API_HEADERS,
+    body: JSON.stringify({ driveid: driveId }),
+    timeoutMs: PLAYER_TIMEOUT_MS
+  }).then(function (r) {
+    if (!r || !r.ok) return null;
+    var j = null;
+    try { j = JSON.parse(String(r.body || '')); } catch (e) { return null; }
+    if (!j) return null;
+    if (j.hls) return j.hls;
+    if (j.url) return j.url;
+    if (j.data && j.data.hls) return j.data.hls;
+    if (j.data && j.data.url) return j.data.url;
+    return null;
+  }).catch(function () { return null; });
 }
 
-function _resolveHls(streamUrl) {
-  return fetch(streamUrl, { headers: JSON_HEADERS, timeoutMs: PLAYER_TIMEOUT_MS })
+function _hlsFromPage(page) {
+  var html = _unescapeSlashes(String(page || ''));
+  var direct = RE_HLS_URL.exec(html);
+  if (direct) return Promise.resolve(direct[1]);
+  var photos = RE_PHOTOS_HLS.exec(html);
+  if (photos) return Promise.resolve(photos[1]);
+
+  var drive = RE_DRIVE_ID.exec(html);
+  var pools = RE_WORKER_POOLS.exec(html);
+  if (!drive || !pools) return Promise.resolve(null);
+
+  var workers = [], m, re = /"(https?:[^"]+)"/g;
+  re.lastIndex = 0;
+  while ((m = re.exec(pools[1]))) workers.push(_unescapeSlashes(m[1]));
+  if (!workers.length) {
+    var wm = RE_WORKER_URL.exec(_unescapeSlashes(pools[1]));
+    if (wm) workers.push(wm[0]);
+  }
+  if (!workers.length) return Promise.resolve(null);
+
+  // The site itself races the first three workers and takes the first answer.
+  var racing = workers.slice(0, 3).map(function (w) {
+    return _postEncode(w.replace(/\/+$/, ''), drive[1]);
+  });
+  return Promise.all(racing).then(function (list) {
+    for (var i = 0; i < list.length; i++) if (list[i]) return list[i];
+    return null;
+  }).catch(function () { return null; });
+}
+
+function _streamPage(streamUrl) {
+  return fetch(streamUrl, { headers: PLAY_HEADERS, timeoutMs: PLAYER_TIMEOUT_MS })
     .then(function (r) {
       if (!r || !r.ok) return null;
-      var page = _unescapeSlashes(String(r.body || ''));
-      var direct = RE_HLS_URL.exec(page);
-      if (direct) return direct[1];
-      var drive = RE_DRIVE_ID.exec(page);
-      var poolM = RE_WORKERS.exec(page);
-      var pool = null;
-      if (poolM) {
-        var wm = RE_WORKER_URL.exec(poolM[1]);
-        if (wm) pool = wm[0];
-      }
-      if (!drive || !pool) return null;
-      var body = JSON.stringify({ driveid: drive[1] });
-      return fetch(pool + '/api/encode', {
-        method: 'POST',
-        headers: JSON_HEADERS,
-        body: body,
-        timeoutMs: PLAYER_TIMEOUT_MS
-      }).then(function (rr) {
-        if (!rr || !rr.ok) return null;
-        try { var j = JSON.parse(String(rr.body || '')); } catch (e) { return null; }
-        if (!j || j.status !== 'success') return null;
-        var hls = j.hls || (j.data && j.data.hls) || null;
-        return hls || null;
-      });
+      return _hlsFromPage(r.body);
     });
 }
 
 function _resolveMediaId(mediaId) {
-  if (!mediaId || !RE_ID24.test(mediaId)) return Promise.resolve(null);
+  if (!mediaId || !/^[a-zA-Z0-9]{24}$/.test(mediaId)) return Promise.resolve(null);
   var playerUrl = BASE + '/player/' + mediaId;
-  return fetch(playerUrl, { headers: JSON_HEADERS, timeoutMs: PLAYER_TIMEOUT_MS })
+  return fetch(playerUrl, { headers: PLAY_HEADERS, timeoutMs: PLAYER_TIMEOUT_MS })
     .then(function (r) {
-      if (!r || !r.ok) return null;
-      var page = String(r.body || '');
-      var im = RE_IFRAME.exec(page);
-      if (im) {
-        var streamUrl = _absolute(im[1]);
-        if (streamUrl) return _resolveHls(streamUrl);
+      if (r && r.ok) {
+        var im = RE_IFRAME.exec(String(r.body || ''));
+        if (im) {
+          var streamUrl = _absolute(im[1]);
+          if (streamUrl) {
+            return _streamPage(streamUrl).then(function (hls) {
+              if (hls) return hls;
+              return _embedFallback(mediaId);
+            });
+          }
+        }
       }
-      // Fallback: direct embed page.
-      return fetch('https://embed.jiofiles.pics/' + mediaId, {
-        headers: JSON_HEADERS, timeoutMs: PLAYER_TIMEOUT_MS
-      }).then(function (rr) {
-        if (!rr || !rr.ok) return null;
-        var direct = _unescapeSlashes(String(rr.body || ''));
-        var sm = RE_STREAM_URL.exec(direct);
-        if (!sm) return null;
-        return _resolveHls(sm[0]);
-      });
+      return _embedFallback(mediaId);
     })
     .catch(function () { return null; });
 }
 
+function _embedFallback(mediaId) {
+  return fetch('https://embed.jiofiles.pics/' + mediaId, {
+    headers: PLAY_HEADERS, timeoutMs: PLAYER_TIMEOUT_MS
+  }).then(function (r) {
+    if (!r || !r.ok) return null;
+    var page = _unescapeSlashes(String(r.body || ''));
+    var sm = RE_STREAM_URL.exec(page);
+    var streamUrl = sm ? sm[0] : ('https://embed.jiofiles.pics/' + mediaId);
+    return _streamPage(streamUrl);
+  }).catch(function () { return null; });
+}
+
 function _source(url, quality, label) {
+  var isM3u8 = /\.m3u8(\?|$)/i.test(url);
   return {
     url: url,
     quality: quality || null,
-    label: label || null,
-    container: 'unknown',
-    headers: { 'User-Agent': UA },
+    label: label || quality || 'HLS',
+    container: isM3u8 ? 'hls' : 'unknown',
+    headers: PLAY_HEADERS,
     kind: 'raw',
     audioLang: null,
     subtitles: []
@@ -369,19 +502,31 @@ function _source(url, quality, label) {
 }
 
 function getVideoSources(url, fast) {
-  var mediaId = String(url || '');
-  if (!RE_ID24.test(mediaId)) return Promise.resolve([]);
-  return _resolveMediaId(mediaId)
-    .then(function (hls) {
-      if (!hls) return [];
-      var out = [];
-      var q = null;
-      var m = /(\d{3,4})p/i.exec(hls);
-      if (m) q = m[1] + 'p';
-      out.push(_source(hls, q, q || 'HLS'));
-      return out;
-    })
-    .catch(function () { return []; });
+  var raw = _trim(String(url || ''));
+  if (!raw) return Promise.resolve([]);
+
+  var entries = raw.split(',');
+  var tasks = entries.map(function (entry) {
+    var bits = entry.split('#');
+    var mediaId = _trim(bits[0]);
+    var quality = _trim(bits[1] || '');
+    if (!/^[a-zA-Z0-9]{24}$/.test(mediaId)) return Promise.resolve(null);
+    return _resolveMediaId(mediaId).then(function (hls) {
+      if (!hls) return null;
+      var label = quality ? quality + ' \u00b7 HLS' : 'HLS';
+      return _source(hls, quality || null, label);
+    });
+  });
+
+  return Promise.all(tasks).then(function (list) {
+    var out = [], seen = {};
+    for (var i = 0; i < list.length; i++) {
+      if (!list[i] || seen[list[i].url]) continue;
+      seen[list[i].url] = true;
+      out.push(list[i]);
+    }
+    return out;
+  }).catch(function () { return []; });
 }
 
 // ---------- manifest ----------
@@ -391,14 +536,41 @@ function getInfo() {
     name: 'MovieNestBD',
     lang: 'en',
     baseUrl: BASE,
-    logo: LOGO,
+    logo: BASE + '/favicon.png',
     type: 'movie',
     version: VERSION
   };
 }
 
-// Home rows: optional. Kept empty so the app falls back to search; the
-// site's own category pages are reachable through search anyway.
+// Home rows come straight from the site's own listing pages.
 function getHome(opts) {
-  return Promise.resolve([]);
+  var page = Number((opts && opts.page) || 1);
+  var qs = page > 1 ? ('?page=' + page) : '';
+  var rowDefs = [
+    ['Latest', '/', null],
+    ['Movies', '/movies', null],
+    ['Series', '/series', null],
+    ['Anime', '/anime', 'anime'],
+    ['Korean', '/category/korean', null]
+  ];
+
+  var tasks = rowDefs.map(function (row) {
+    return fetch(BASE + row[1] + qs, {
+      headers: { 'User-Agent': UA },
+      timeoutMs: LIST_TIMEOUT_MS
+    }).then(function (r) {
+      if (!r || !r.ok) return [];
+      return _parseCards(String(r.body || ''), row[2]);
+    }).catch(function () { return []; });
+  });
+
+  return Promise.all(tasks).then(function (lists) {
+    var out = [];
+    for (var i = 0; i < rowDefs.length; i++) {
+      if (lists[i] && lists[i].length) {
+        out.push({ title: rowDefs[i][0], items: lists[i] });
+      }
+    }
+    return out;
+  }).catch(function () { return []; });
 }
