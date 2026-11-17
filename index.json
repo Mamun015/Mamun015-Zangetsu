@@ -1,11 +1,11 @@
 {
   "name": "🇧🇩 Mamun015 BDIX",
-  "description": "🇧🇩 Bangladesh BDIX sources for DhakaFlix, Circle FTP, Dflix and ICC Ftp — movies, TV series and anime, straight from the local network.",
+  "description": "🇧🇩 Bangladesh sources — DhakaFlix, Circle FTP, Dflix, ICC Ftp (BDIX local network) plus MovieNestBD (public website) — movies, TV series and anime.",
   "sources": [
     {
       "id": "dhakaflix_movies",
       "name": "DhakaFlix Movies",
-      "version": "1.7.0",
+      "version": "1.8.0",
       "type": "movie",
       "lang": "en",
       "file": "sources/dhakaflix.js",
@@ -15,7 +15,7 @@
     {
       "id": "dhakaflix_series",
       "name": "DhakaFlix Series",
-      "version": "1.7.0",
+      "version": "1.8.0",
       "type": "movie",
       "lang": "en",
       "file": "sources/dhakaflix.js",
@@ -25,7 +25,7 @@
     {
       "id": "dhakaflix_anime",
       "name": "DhakaFlix Anime",
-      "version": "1.7.0",
+      "version": "1.8.0",
       "type": "anime",
       "lang": "en",
       "file": "sources/dhakaflix.js",
@@ -35,7 +35,7 @@
     {
       "id": "circleftp",
       "name": "(BDIX) Circle FTP",
-      "version": "1.7.0",
+      "version": "1.8.0",
       "type": "movie",
       "lang": "bn",
       "file": "sources/bdix.js",
@@ -45,7 +45,7 @@
     {
       "id": "dflix_movies",
       "name": "(BDIX) Dflix Movies",
-      "version": "1.7.0",
+      "version": "1.8.0",
       "type": "movie",
       "lang": "bn",
       "file": "sources/bdix.js",
@@ -55,7 +55,7 @@
     {
       "id": "dflix_series",
       "name": "(BDIX) Dflix Series",
-      "version": "1.7.0",
+      "version": "1.8.0",
       "type": "movie",
       "lang": "bn",
       "file": "sources/bdix.js",
@@ -65,10 +65,20 @@
     {
       "id": "iccftp",
       "name": "(BDIX) ICC Ftp",
-      "version": "1.7.0",
+      "version": "1.8.0",
       "type": "movie",
       "lang": "bn",
       "file": "sources/bdix.js",
+      "logo": "https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png",
+      "nsfw": false
+    },
+    {
+      "id": "movienestbd",
+      "name": "MovieNestBD",
+      "version": "1.8.0",
+      "type": "movie",
+      "lang": "en",
+      "file": "sources/movienestbd.js",
       "logo": "https://raw.githubusercontent.com/Mamun015/Mamun015-Zangetsu/main/logo.png",
       "nsfw": false
     }
