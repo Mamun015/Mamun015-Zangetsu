@@ -16,7 +16,7 @@ var UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, li
 var BASE = 'https://movienestbd.best';
 var SITE = 'movienestbd';
 
-var VERSION = '1.0.1';
+var VERSION = '1.0.2';
 var LIST_TIMEOUT_MS = 12000;
 var DETAIL_TIMEOUT_MS = 12000;
 var PLAYER_TIMEOUT_MS = 15000;
@@ -259,13 +259,13 @@ function _linksFromRaw(block) {
 }
 
 // A movie has one entry in the player, so all its quality links are folded into
-// that one episode id: "<id>#<quality>,<id>#<quality>". getVideoSources splits
+// that one episode id: "<id>~<quality>,<id>~<quality>". getVideoSources splits
 // it back apart and returns one VideoSource per quality.
 function _movieEpisode(links) {
   var seen = {}, parts = [], qualities = [], i, l, key;
   for (i = 0; i < links.length; i++) {
     l = links[i];
-    key = l.id + '#' + l.quality;
+    key = l.id + '~' + l.quality;
     if (seen[key]) continue;
     seen[key] = true;
     parts.push(key);
@@ -396,6 +396,41 @@ var API_HEADERS = {
   'Accept-Encoding': 'identity'
 };
 
+// The xcloud stream host sits behind a Cloudflare rule that only lets HTTP/2
+// clients through: curl/HTTP2 gets the page, HTTP/1.1 gets "Just a moment".
+// The app's Dio client (and Node) speak HTTP/1.1, so the raw page never
+// arrives. r.jina.ai fetches over HTTP/2 server-side and can hand back the raw
+// HTML, which carries the two values playback needs.
+var PROXY_PREFIX = 'https://r.jina.ai/';
+var PROXY_TIMEOUT_MS = 24000;
+var RE_BLOCK_PAGE = /just a moment|cf-mitigated|challenge-platform|enable javascript and cookies/i;
+var RE_PLAYER_DATA = /encodedDriveId|workerPools|hlsUrl|photosHlsUrl/;
+
+function _hasPlayerData(html) {
+  return RE_PLAYER_DATA.test(String(html || ''));
+}
+
+function _proxyStreamHtml(url) {
+  return fetch(PROXY_PREFIX + url, {
+    headers: { 'User-Agent': UA, 'X-Return-Format': 'html' },
+    timeoutMs: PROXY_TIMEOUT_MS
+  }).then(function (r) {
+    if (!r || !r.ok) return null;
+    var body = String(r.body || '');
+    return _hasPlayerData(body) ? body : null;
+  }).catch(function () { return null; });
+}
+
+function _streamHtml(url) {
+  return fetch(url, { headers: PLAY_HEADERS, timeoutMs: PLAYER_TIMEOUT_MS })
+    .then(function (r) {
+      var body = r && r.body ? String(r.body) : '';
+      if (r && r.ok && _hasPlayerData(body) && !RE_BLOCK_PAGE.test(body)) return body;
+      return _proxyStreamHtml(url);
+    })
+    .catch(function () { return _proxyStreamHtml(url); });
+}
+
 function _postEncode(worker, driveId) {
   return fetch(worker + '/api/encode', {
     method: 'POST',
@@ -418,39 +453,73 @@ function _postEncode(worker, driveId) {
 function _hlsFromPage(page) {
   var html = _unescapeSlashes(String(page || ''));
   var direct = RE_HLS_URL.exec(html);
-  if (direct) return Promise.resolve(direct[1]);
   var photos = RE_PHOTOS_HLS.exec(html);
-  if (photos) return Promise.resolve(photos[1]);
+  var directUrl = direct ? direct[1] : (photos ? photos[1] : null);
 
   var drive = RE_DRIVE_ID.exec(html);
   var pools = RE_WORKER_POOLS.exec(html);
-  if (!drive || !pools) return Promise.resolve(null);
 
-  var workers = [], m, re = /"(https?:[^"]+)"/g;
-  re.lastIndex = 0;
-  while ((m = re.exec(pools[1]))) workers.push(_unescapeSlashes(m[1]));
-  if (!workers.length) {
-    var wm = RE_WORKER_URL.exec(_unescapeSlashes(pools[1]));
-    if (wm) workers.push(wm[0]);
-  }
-  if (!workers.length) return Promise.resolve(null);
+  var viaWorkers = function () {
+    if (!drive || !pools) return Promise.resolve(null);
+    var workers = [], m, re = /"(https?:[^"]+)"/g;
+    re.lastIndex = 0;
+    while ((m = re.exec(pools[1]))) workers.push(_unescapeSlashes(m[1]).replace(/\/+$/, ''));
+    if (!workers.length) {
+      var wm = RE_WORKER_URL.exec(_unescapeSlashes(pools[1]));
+      if (wm) workers.push(wm[0].replace(/\/+$/, ''));
+    }
+    if (!workers.length) return Promise.resolve(null);
+    return _firstPlayable(workers.slice(0, 3), drive[1]);
+  };
 
-  // The site itself races the first three workers and takes the first answer.
-  var racing = workers.slice(0, 3).map(function (w) {
-    return _postEncode(w.replace(/\/+$/, ''), drive[1]);
+  if (!directUrl) return viaWorkers();
+  return _verifyHls(directUrl).then(function (ok) {
+    return ok ? ok : viaWorkers();
   });
-  return Promise.all(racing).then(function (list) {
-    for (var i = 0; i < list.length; i++) if (list[i]) return list[i];
-    return null;
-  }).catch(function () { return null; });
+}
+
+// A worker can answer `status: success` and still serve a master manifest that
+// 403s upstream (the worker pool rotates, and not every one has a working copy).
+// So the answer is only accepted once the manifest itself loads.
+function _verifyHls(url) {
+  return fetch(url, { headers: PLAY_HEADERS, timeoutMs: 9000 })
+    .then(function (r) {
+      if (!r || !r.ok) return null;
+      var body = String(r.body || '');
+      return body.indexOf('#EXTM3U') >= 0 ? url : null;
+    })
+    .catch(function () { return null; });
+}
+
+// Like the site: race the workers, but settle on the first manifest that really
+// plays. Resolves null only when every candidate has failed.
+function _firstPlayable(workers, driveId) {
+  return new Promise(function (resolve) {
+    var pending = workers.length, done = false;
+    if (!pending) return resolve(null);
+    function finish(value) {
+      if (done) return;
+      done = true;
+      resolve(value);
+    }
+    workers.forEach(function (worker) {
+      _postEncode(worker, driveId)
+        .then(function (hls) { return hls ? _verifyHls(hls) : null; })
+        .then(function (ok) { if (ok) finish(ok); })
+        .catch(function () {})
+        .then(function () {
+          pending -= 1;
+          if (pending === 0) finish(null);
+        });
+    });
+  });
 }
 
 function _streamPage(streamUrl) {
-  return fetch(streamUrl, { headers: PLAY_HEADERS, timeoutMs: PLAYER_TIMEOUT_MS })
-    .then(function (r) {
-      if (!r || !r.ok) return null;
-      return _hlsFromPage(r.body);
-    });
+  return _streamHtml(streamUrl).then(function (page) {
+    if (!page) return null;
+    return _hlsFromPage(page);
+  });
 }
 
 function _resolveMediaId(mediaId) {
@@ -488,12 +557,14 @@ function _embedFallback(mediaId) {
 }
 
 function _source(url, quality, label) {
-  var isM3u8 = /\.m3u8(\?|$)/i.test(url);
   return {
     url: url,
     quality: quality || null,
     label: label || quality || 'HLS',
-    container: isM3u8 ? 'hls' : 'unknown',
+    // The workers return a master playlist with no .m3u8 suffix, so the
+    // extension cannot be sniffed from the URL. Saying "hls" up front is what
+    // makes the player build an HLS source instead of a raw file.
+    container: 'hls',
     headers: PLAY_HEADERS,
     kind: 'raw',
     audioLang: null,
@@ -507,7 +578,7 @@ function getVideoSources(url, fast) {
 
   var entries = raw.split(',');
   var tasks = entries.map(function (entry) {
-    var bits = entry.split('#');
+    var bits = entry.split('~');
     var mediaId = _trim(bits[0]);
     var quality = _trim(bits[1] || '');
     if (!/^[a-zA-Z0-9]{24}$/.test(mediaId)) return Promise.resolve(null);
